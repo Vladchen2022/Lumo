@@ -157,6 +157,7 @@ final class LumoCoreTests:XCTestCase {
         var json = try JSONSerialization.jsonObject(with:JSONEncoder().encode(old)) as! [String:Any]
         json["formatVersion"] = 1
         var recipe = json["recipe"] as! [String:Any]; recipe.removeValue(forKey:"colorLayers")
+        recipe.removeValue(forKey:"method"); recipe.removeValue(forKey:"deconstruction")
         var shape = recipe["shape"] as! [String:Any]; shape.removeValue(forKey:"organic"); shape.removeValue(forKey:"erosion"); recipe["shape"] = shape; json["recipe"] = recipe
         let root = try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
         let url = root.appendingPathComponent("legacy.lumo"); try JSONSerialization.data(withJSONObject:json).write(to:url)
@@ -271,6 +272,119 @@ final class LumoCoreTests:XCTestCase {
         var error = 0
         for y in 0..<256 {for x in 0..<256 {for c in 0..<4 {if abs(Int(a[((y+128)*512+x+128)*4+c])-Int(b[(y*256+x)*4+c]))>2 {error += 1}}}}
         XCTAssertLessThan(error,100)
+    }
+    func testDeconstructionPartitionsEntireImageAndSlidersReturn() throws {
+        let root = try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
+        let url = root.appendingPathComponent("source.png")
+        try fixture(url,width:240,height:160) {c in c.setFillColor(CGColor(srgbRed:0.2,green:0.5,blue:0.8,alpha:1)); c.fill(CGRect(x:0,y:0,width:240,height:160))}
+        var r = GenerationRecipe(); r.colorSource = try ReferenceAnalyzer.analyze(url:url,forColor:true)
+        let abstract = SceneGenerator.generate(r)
+        r.method = .deconstruction; r.version = 2
+        let original = SceneGenerator.generate(r)
+        XCTAssertEqual(original,SceneGenerator.generate(r)); XCTAssertTrue(original.shapes.isEmpty)
+        for amount in [0.0,0.4,1.0] {
+            r.deconstruction.granularity = amount
+            let scene = SceneGenerator.generate(r)
+            XCTAssertEqual(scene.fragments.count,r.deconstruction.fragmentCount)
+            let area = scene.fragments.reduce(0.0) {total,fragment in
+                let p = fragment.textureCoordinates
+                let twice = p.indices.reduce(0.0) {sum,i in let j = (i+1)%p.count; return sum+Double(p[i].x*p[j].y-p[j].x*p[i].y)}
+                return total+abs(twice)/2
+            }
+            XCTAssertEqual(area,1,accuracy:0.00001)
+        }
+        r.deconstruction = DeconstructionParameters(); r.deconstruction.breakup = 0.5001
+        let next = SceneGenerator.generate(r)
+        XCTAssertEqual(original.fragments.map(\.textureCoordinates),next.fragments.map(\.textureCoordinates))
+        for (a,b) in zip(original.fragments,next.fragments) {for (p,q) in zip(a.contour,b.contour) {XCTAssertLessThan(hypot(p.x-q.x,p.y-q.y),0.001)}}
+        r.deconstruction.breakup = 0.5; XCTAssertEqual(original,SceneGenerator.generate(r))
+        var order = r; order.colorSeed &+= 1
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues:original.fragments.map {($0.id,$0.contour)}),Dictionary(uniqueKeysWithValues:SceneGenerator.generate(order).fragments.map {($0.id,$0.contour)}))
+        XCTAssertNotEqual(original.fragments.map(\.id),SceneGenerator.generate(order).fragments.map(\.id))
+        var grouped = r; grouped.deconstruction.grouping = 1; grouped.deconstruction.sizeVariation = 0; grouped.deconstruction.overlap = 0.5
+        grouped.deconstruction.rotation = 0.8; grouped.deconstruction.breakup = 0.8
+        let together = SceneGenerator.generate(grouped)
+        grouped.deconstruction.breakup = 0
+        let assembled = SceneGenerator.generate(grouped)
+        func group(_ f: ImageFragment) -> Int {min(2,Int(f.sourceCenter.y*3))*3+min(2,Int(f.sourceCenter.x*3))}
+        for i in together.fragments.indices {for j in together.fragments.indices where j>i && group(together.fragments[i]) == group(together.fragments[j]) {
+            let a = together.fragments[i].center-together.fragments[j].center, b = assembled.fragments[i].center-assembled.fragments[j].center
+            XCTAssertEqual(hypot(a.x,a.y),hypot(b.x,b.y),accuracy:0.00001,"Group rotation must preserve local distances")
+        }}
+        r.deconstruction.softness = 0.9
+        r.method = .abstract; r.version = 1; XCTAssertEqual(abstract,SceneGenerator.generate(r))
+    }
+    func testGPUDeconstructionZeroBreakupReconstructsPixelsWithoutSeams() throws {
+        let root = try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
+        let url = root.appendingPathComponent("pattern.png")
+        try fixture(url,width:256,height:192) {c in
+            c.setFillColor(CGColor(srgbRed:0.12,green:0.33,blue:0.74,alpha:1)); c.fill(CGRect(x:0,y:0,width:256,height:192))
+            c.setFillColor(CGColor(srgbRed:0.86,green:0.23,blue:0.11,alpha:1)); c.fill(CGRect(x:0,y:96,width:128,height:96))
+            c.setFillColor(CGColor(srgbRed:0.2,green:0.72,blue:0.3,alpha:1)); c.fill(CGRect(x:128,y:0,width:128,height:96))
+            c.setFillColor(CGColor(srgbRed:1,green:0,blue:1,alpha:1)); c.fill(CGRect(x:201,y:51,width:1,height:1))
+        }
+        var r = GenerationRecipe(); r.colorSource = try ReferenceAnalyzer.analyze(url:url,forColor:true)
+        r.method = .deconstruction; r.version = 2; r.canvasAspect = 4.0/3
+        r.color.hue = 135; r.setLayer(0) {$0.paletteOverrides[0] = .init(0,0,0)}
+        r.deconstruction.breakup = 0; r.deconstruction.softness = 1
+        let renderer = try MetalRenderer()
+        let expected = try ReferencePixels(data:r.colorSource!.deconstructionImage).rgbaBytes
+        for density in [0.0,0.45,1.0] {
+            r.deconstruction.granularity = density
+            let image = try renderer.image(scene:SceneGenerator.generate(r),width:256,height:192)
+            let actual = Array(image.dataProvider!.data! as Data)
+            var differences = 0
+            for i in stride(from:0,to:actual.count,by:4) {for (a,b) in [(i,i+2),(i+1,i+1),(i+2,i),(i+3,i+3)] {if abs(Int(actual[a])-Int(expected[b])) > 2 {differences += 1}}}
+            XCTAssertLessThan(differences,20,"Every source pixel, including the one-pixel accent, must reassemble without holes or flips")
+        }
+    }
+    func testDeconstructionThreeLayersOfflinePersistenceAndCrop() throws {
+        let root = try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
+        var project = LumoProject(); project.recipe.method = .deconstruction; project.recipe.version = 2
+        project.recipe.deconstruction.softness = 1; project.recipe.deconstruction.granularity = 1
+        for layer in 0..<3 {
+            let url = root.appendingPathComponent("layer\(layer).png")
+            try fixture(url,width:200,height:200) {c in
+                c.setFillColor(CGColor(srgbRed:Double(layer+1)*0.25,green:0.4,blue:0.7,alpha:0.6)); c.fill(CGRect(x:0,y:0,width:200,height:200))
+                c.setFillColor(CGColor(srgbRed:0.8,green:0.2,blue:Double(layer)*0.3,alpha:1)); c.fillEllipse(in:CGRect(x:25,y:20,width:130,height:130))
+            }
+            let reference = try ReferenceAnalyzer.analyze(url:url,forColor:true)
+            project.recipe.setLayer(layer) {$0.source = reference; $0.blend = layer == 0 ? .normal : .softLight; $0.blockBlend = .overlay; $0.blockOpacity = 0.75}
+            try FileManager.default.removeItem(at:url)
+        }
+        project.snapshots = [SavedSnapshot(name:"解构收藏",recipe:project.recipe)]
+        let path = root.appendingPathComponent("deconstruction.lumo"); try ProjectStore.save(project,to:path)
+        let restored = try ProjectStore.open(path)
+        XCTAssertEqual(restored.recipe,project.recipe); XCTAssertEqual(restored.snapshots[0].recipe,project.recipe)
+        let renderer = try MetalRenderer(), scene = SceneGenerator.generate(restored.recipe)
+        XCTAssertEqual(scene.fragments.count,3*project.recipe.deconstruction.fragmentCount)
+        let full = try renderer.image(scene:scene,width:512,height:512), crop = try renderer.image(scene:scene,width:256,height:256,crop:.init(x:0.25,y:0.25,width:0.5,height:0.5))
+        let a = Array(full.dataProvider!.data! as Data), b = Array(crop.dataProvider!.data! as Data)
+        var differences = 0
+        for y in 0..<256 {for x in 0..<256 {for channel in 0..<4 {if abs(Int(a[((y+128)*512+x+128)*4+channel])-Int(b[(y*256+x)*4+channel]))>2 {differences += 1}}}}
+        XCTAssertLessThan(differences,100)
+        var invalid = project; invalid.recipe.deconstruction.rotation = .nan
+        XCTAssertThrowsError(try ProjectStore.validate(invalid))
+        invalid = project; invalid.recipe.version = 1; XCTAssertThrowsError(try ProjectStore.validate(invalid))
+        var oldReference = restored.recipe; oldReference.setLayer(0) {$0.source!.renderImage = nil}
+        XCTAssertEqual(oldReference.colorSource!.deconstructionImage,oldReference.colorSource!.samplingImage)
+    }
+    func testGPUDeconstructionTransparencyUsesLinearCompositing() throws {
+        let root = try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
+        let url = root.appendingPathComponent("alpha.png")
+        try fixture(url,width:64,height:64) {c in c.setFillColor(CGColor(srgbRed:0.8,green:0.2,blue:0.4,alpha:0.5)); c.fill(CGRect(x:0,y:0,width:32,height:64))}
+        var r = GenerationRecipe(); r.method = .deconstruction; r.version = 2; r.deconstruction.breakup = 0
+        r.colorSource = try ReferenceAnalyzer.analyze(url:url,forColor:true)
+        let scene = SceneGenerator.generate(r), renderer = try MetalRenderer()
+        let image = try renderer.image(scene:scene,width:64,height:64), bytes = Array(image.dataProvider!.data! as Data)
+        let left = (32*64+16)*4, right = (32*64+48)*4
+        for (offset,value) in [(2,scene.background.r),(1,scene.background.g),(0,scene.background.b)] {XCTAssertEqual(Double(bytes[right+offset])/255,value,accuracy:0.005)}
+        let base = scene.background.linear, source = RGBColor(0.8,0.2,0.4).linear
+        for (offset,channel) in [(2,0),(1,1),(0,2)] {
+            let linear = Double((base[channel]+source[channel])/2)
+            let expected = linear <= 0.0031308 ? linear*12.92 : 1.055*pow(linear,1/2.4)-0.055
+            XCTAssertEqual(Double(bytes[left+offset])/255,expected,accuracy:0.015)
+        }
     }
     private func temporaryDirectory() throws -> URL {let url=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); try FileManager.default.createDirectory(at:url,withIntermediateDirectories:true); return url}
     private func fixture(_ url:URL,width:Int,height:Int,draw:(CGContext)->Void) throws {

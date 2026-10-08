@@ -46,3 +46,16 @@ fragment FragmentOutput lumoCompositeFragment(CompositeRaster in [[stage_in]], t
     float4 source = float4(sample.rgb/max(sample.a,0.00001),sample.a*u.opacity);
     return {composite(source,destination,u.blend)};
 }
+struct ImageVertex {float2 position; float2 uv; float alpha; uint blend;};
+struct ImageRaster {float4 position [[position]]; float2 uv; float alpha; uint blend [[flat]];};
+vertex ImageRaster lumoImageVertex(uint id [[vertex_id]], const device ImageVertex *vertices [[buffer(0)]], constant Uniforms &u [[buffer(1)]]) {
+    ImageVertex v = vertices[id];
+    float2 p = (v.position-u.viewport.xy)/u.viewport.zw;
+    return {float4(p.x*2-1,1-p.y*2,0,1),v.uv,v.alpha,v.blend};
+}
+fragment FragmentOutput lumoImageFragment(ImageRaster in [[stage_in]], texture2d<float> image [[texture(0)]], float4 destination [[color(0),raster_order_group(0)]]) {
+    constexpr sampler imageSampler(coord::normalized,address::clamp_to_edge,filter::linear);
+    float4 sample = image.sample(imageSampler,in.uv);
+    sample.a *= in.alpha;
+    return {composite(sample,destination,in.blend)};
+}

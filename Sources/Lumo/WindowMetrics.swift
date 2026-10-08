@@ -34,7 +34,7 @@ final class WindowMetrics:@unchecked Sendable {
         let idleDraws=shared.count-idleStart
         let intervals=zip(times.dropFirst(),times).map {($0-$1)*1000}.filter {$0>0.1}.sorted()
         let average=times.count>1 ? Double(times.count-1)/(times.last!-times.first!) : 0
-        let report:[String:Any]=["presentedFrames":times.count,"averageFPS":average,"medianFrameIntervalMilliseconds":intervals.isEmpty ? 0 : intervals[intervals.count/2],"p95FrameIntervalMilliseconds":intervals.isEmpty ? 0 : intervals[Int(Double(intervals.count)*0.95)],"idleDrawsInOneSecond":idleDraws,"previewMaximumPixels":1536,"passed":average>=30 && idleDraws==0]
+        let report:[String:Any]=["method":original.method.rawValue,"sourceLayers":(0..<3).filter {original.layer($0).source != nil}.count,"presentedFrames":times.count,"averageFPS":average,"medianFrameIntervalMilliseconds":intervals.isEmpty ? 0 : intervals[intervals.count/2],"p95FrameIntervalMilliseconds":intervals.isEmpty ? 0 : intervals[Int(Double(intervals.count)*0.95)],"idleDrawsInOneSecond":idleDraws,"previewMaximumPixels":1536,"passed":average>=30 && idleDraws==0]
         if let index=CommandLine.arguments.firstIndex(of:"--profile-window"),CommandLine.arguments.count>index+1 {
             let url=URL(fileURLWithPath:CommandLine.arguments[index+1])
             do {try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)} catch {print(error)}

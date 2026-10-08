@@ -5,10 +5,11 @@ struct ColorSourcesView: View {
     @ObservedObject var model: StudioModel
     private var index: Int {model.selectedColorLayer}
     private var layer: ColorLayer {model.recipe.layer(index)}
+    private var deconstruction: Bool {model.recipe.method == .deconstruction}
     var body: some View {
         VStack(alignment:.leading,spacing:10) {
             HStack {
-                Text("颜色来源 · 三层").font(.system(size:11,weight:.semibold))
+                Text(deconstruction ? "图片来源 · 三层" : "颜色来源 · 三层").font(.system(size:11,weight:.semibold))
                 Spacer()
                 Button {model.edit {$0.colorLocked.toggle()}} label: {Image(systemName:model.recipe.colorLocked ? "lock.fill" : "lock.open").foregroundStyle(model.recipe.colorLocked ? Theme.accent : Theme.secondary)}
                     .buttonStyle(.plain).help("锁定全部配色；换结构时保持颜色层").accessibilityLabel("锁定颜色")
@@ -20,7 +21,7 @@ struct ColorSourcesView: View {
                         Button {model.selectedColorLayer = i} label: {
                             HStack(spacing:6) {
                                 Text("\(i+1)").font(.system(size:10,weight:.semibold,design:.monospaced)).frame(width:18,height:22).background(i == index ? Theme.accent.opacity(0.22) : Theme.inset,in:RoundedRectangle(cornerRadius:4))
-                                Text(item.source?.name ?? (i == 0 ? "随机配色" : "添加参考图片")).font(.system(size:10)).lineLimit(1).truncationMode(.middle)
+                                Text(item.source?.name ?? (i == 0 && !deconstruction ? "随机配色" : "添加参考图片")).font(.system(size:10)).lineLimit(1).truncationMode(.middle)
                                 Spacer(minLength:0)
                             }.contentShape(Rectangle())
                         }.buttonStyle(.plain).foregroundStyle(i == index ? Theme.accent : Theme.secondary).accessibilityLabel("选择颜色层 \(i+1)")
@@ -42,23 +43,25 @@ struct ColorSourcesView: View {
                 Spacer(minLength:0)
                 if layer.source != nil {Button {model.clearSource(color:true,layer:index)} label: {Image(systemName:"xmark.circle")}.buttonStyle(.plain).font(.system(size:10)).help("清除当前颜色层")}
             }
+            if !deconstruction {
             Button {model.showColorPicker = true} label: {
                 HStack(spacing:3) {ForEach(Array(SceneGenerator.palette(for:model.recipe,layer:index,sixSlots:true).enumerated()),id:\.offset) {entry in Rectangle().fill(entry.element.color.swiftUI).frame(maxWidth:.infinity).frame(height:20)}}.clipShape(RoundedRectangle(cornerRadius:3))
             }.buttonStyle(.plain).disabled(layer.source == nil).accessibilityLabel("点选颜色层 \(index+1) 的色标").help("打开参考图，替换六个色标并调节占比")
             if layer.source != nil {
                 Button("从参考图点选色标…") {model.showColorPicker = true}.buttonStyle(.borderless).font(.system(size:10))
             }
+            }
             Picker("层间混合",selection:model.layerBinding(index,\.blend)) {ForEach(ColorBlendMode.allCases,id:\.self) {Text($0.title).tag($0)}}.font(.system(size:10)).controlSize(.small)
             layerSlider("整层透明度",\.opacity)
-            DisclosureGroup("色块内部混合") {
+            DisclosureGroup(deconstruction ? "碎片内部混合" : "色块内部混合") {
                 VStack(spacing:10) {
-                    Picker("色块方式",selection:model.layerBinding(index,\.blockBlend)) {ForEach(ColorBlendMode.allCases,id:\.self) {Text($0.title).tag($0)}}.controlSize(.small)
-                    layerSlider("色块透明度",\.blockOpacity)
+                    Picker(deconstruction ? "碎片方式" : "色块方式",selection:model.layerBinding(index,\.blockBlend)) {ForEach(ColorBlendMode.allCases,id:\.self) {Text($0.title).tag($0)}}.controlSize(.small)
+                    layerSlider(deconstruction ? "碎片透明度" : "色块透明度",\.blockOpacity)
                 }.padding(.top,10)
             }.font(.system(size:10)).foregroundStyle(Theme.secondary)
             HStack(spacing:6) {
                 Button("导入三张…") {model.importImage(color:true,multiple:true)}.buttonStyle(.bordered)
-                Button("换颜色") {model.randomize(shape:false)}.buttonStyle(.bordered).disabled(model.recipe.colorLocked)
+                Button(deconstruction ? "换叠放" : "换颜色") {model.randomize(shape:false)}.buttonStyle(.bordered).disabled(model.recipe.colorLocked)
             }.font(.system(size:10)).controlSize(.small)
         }
     }

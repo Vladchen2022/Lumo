@@ -39,6 +39,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     }
     func edit(_ action: (inout GenerationRecipe) -> Void) {
         let before = recipe; var next = recipe; action(&next)
+        next.version = next.method == .deconstruction ? 2 : 1
         guard next != before else { return }
         recipe = next; history.record(before:before,after:next); scene = SceneGenerator.generate(next)
         if before.canvasAspect != next.canvasAspect { resetExportAspect() }
@@ -53,7 +54,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     func redo() { if let next = history.redo(recipe) { recipe = next; scene = SceneGenerator.generate(next); resetExportAspect() } }
     func randomize(color: Bool = true, shape: Bool = true) {
         edit { r in if color {r.randomizeColor()}; if shape {r.randomizeShape()} }
-        status = "已生成新的构成；锁定的来源保持不变"
+        status = recipe.method == .deconstruction ? "已重新分块或更换碎片叠放；锁定的来源保持不变" : "已生成新的构成；锁定的来源保持不变"
     }
     func apply(_ preset: CompositionPreset) { edit {$0.apply(preset)}; status = "已应用「\(preset.title)」，可以继续调节" }
     func layerBinding<T>(_ index: Int, _ keyPath: WritableKeyPath<ColorLayer,T>) -> Binding<T> {
@@ -84,7 +85,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
                     else {r.shapeSource = reference; if let f = reference.features {r.shape = ShapeParameters(features:f)}}
                 }
                 if color {if let id = reference.id {originalURLs[id] = url}; selectedColorLayer = layer}
-                status = color ? "颜色层 \(layer+1) 已提取；可混合、调透明度或点选色标" : "已提取结构特征，可以继续调整"
+                status = color ? (recipe.method == .deconstruction ? "图片层 \(layer+1) 已导入；可调节分块、打散和混合" : "颜色层 \(layer+1) 已提取；可混合、调透明度或点选色标") : "已提取结构特征，可以继续调整"
             } catch {
                 guard request == (color ? layerRequests[layer] : shapeRequest) else {return}
                 alert = StudioAlert(message:error.localizedDescription)
@@ -175,7 +176,12 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
         let p=LumoProject(); recipe=p.recipe; snapshots=[]; exportSettings=p.export; savedProject=p; projectURL=nil; history=RecipeHistory(); scene=SceneGenerator.generate(recipe); status="新的构成"
     }
     func profileFrame(original:GenerationRecipe,frame:Int) {
-        var next=original; next.shape.density=1; next.mode = .combined; next.shape.direction=Double(frame)*0.8
+        var next=original
+        if original.method == .deconstruction {
+            next.deconstruction.granularity=1
+            next.deconstruction.breakup=0.25+Double(frame)/180*0.65
+            next.deconstruction.rotation=0.7
+        } else {next.shape.density=1; next.mode = .combined; next.shape.direction=Double(frame)*0.8}
         recipe=next; scene=SceneGenerator.generate(next)
     }
     func profileRestore(_ original:GenerationRecipe) {recipe=original; scene=SceneGenerator.generate(original)}

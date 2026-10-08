@@ -29,6 +29,8 @@ public struct AbstractScene: Equatable, Sendable {
     public var shapeDisplay: ShapeDisplay
     public var appearance: AppearanceParameters
     public var layers: [ColorLayer] = []
+    public var method: GenerationMethod = .abstract
+    public var fragments: [ImageFragment] = []
 }
 public enum SceneGenerator {
     public static func palette(for recipe: GenerationRecipe, layer index: Int = 0, adjusted: Bool = true, sixSlots: Bool = false) -> [PaletteEntry] {
@@ -67,6 +69,7 @@ public enum SceneGenerator {
         return originals.enumerated().map { PaletteEntry(adjusted ? adjust($0.element.color, parameters: recipe.color) : $0.element.color, weights[$0.offset] / sum) }
     }
     public static func generate(_ recipe: GenerationRecipe) -> AbstractScene {
+        if recipe.method == .deconstruction {return DeconstructionGenerator.generate(recipe)}
         let palette = palette(for: recipe)
         let p = recipe.shape
         var shapes: [SceneShape] = []

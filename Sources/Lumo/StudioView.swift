@@ -46,8 +46,12 @@ struct StudioView: View {
                 Image(systemName:"square.stack.3d.up.fill").font(.system(size:18)).foregroundStyle(Theme.accent)
                 Text("LUMO").font(.system(size:15,weight:.semibold,design:.rounded)).tracking(2)
             }.frame(width:185,alignment:.leading)
-            Picker("显示模式",selection:model.binding(\.mode)) {ForEach(DisplayMode.allCases,id:\.self) {Text($0.title).tag($0)}}
-                .pickerStyle(.segmented).frame(width:210).accessibilityIdentifier("displayMode")
+            if model.recipe.method == .abstract {
+                Picker("显示模式",selection:model.binding(\.mode)) {ForEach(DisplayMode.allCases,id:\.self) {Text($0.title).tag($0)}}
+                    .pickerStyle(.segmented).frame(width:210).accessibilityIdentifier("displayMode")
+            } else {
+                Label("图像解构 · 试验",systemImage:"square.on.square.dashed").font(.system(size:12,weight:.medium)).foregroundStyle(Theme.accent).frame(width:210,alignment:.leading)
+            }
             Menu {ForEach(CompositionPreset.allCases,id:\.self) {preset in Button(preset.title) {model.apply(preset)}}} label: {Label("起始构成",systemImage:"square.grid.2x2")}
                 .menuStyle(.borderlessButton).fixedSize()
             Spacer(minLength:0)
@@ -69,10 +73,10 @@ struct StudioView: View {
             VStack(alignment:.leading,spacing:22) {
                 VStack(alignment:.leading,spacing:4) {
                     Text("参考来源").font(.system(size:14,weight:.semibold))
-                    Text("分开取色与结构，重新构成").font(.system(size:10)).foregroundStyle(Theme.secondary)
+                    Text(model.recipe.method == .abstract ? "分开取色与结构，重新构成" : "保留原图内容，分块后重新组织").font(.system(size:10)).foregroundStyle(Theme.secondary)
                 }
                 ColorSourcesView(model:model)
-                SourceCard(model:model,color:false)
+                if model.recipe.method == .abstract {SourceCard(model:model,color:false)}
                 Button {model.randomize()} label: {Label("全部随机",systemImage:"shuffle").frame(maxWidth:.infinity)}
                     .buttonStyle(.bordered).controlSize(.large).disabled(model.recipe.colorLocked && model.recipe.shapeLocked).help("尊重两个来源的锁定状态")
                 Divider().overlay(Theme.line)
@@ -92,7 +96,7 @@ struct StudioView: View {
                             Button {model.restore(snapshot)} label: {
                                 HStack(spacing:9) {
                                     SnapshotPreview(recipe:snapshot.recipe).equatable().frame(width:44,height:44).clipShape(RoundedRectangle(cornerRadius:4))
-                                    VStack(alignment:.leading,spacing:4) {Text(snapshot.name).font(.system(size:11,weight:.medium)); Text(snapshot.recipe.mode.title).font(.system(size:10)).foregroundStyle(Theme.secondary)}
+                                    VStack(alignment:.leading,spacing:4) {Text(snapshot.name).font(.system(size:11,weight:.medium)); Text(snapshot.recipe.method == .deconstruction ? "图像解构" : snapshot.recipe.mode.title).font(.system(size:10)).foregroundStyle(Theme.secondary)}
                                     Spacer(minLength:0)
                                 }.contentShape(Rectangle())
                             }.buttonStyle(.plain)
@@ -126,6 +130,13 @@ struct StudioView: View {
                     if let renderer=model.renderer {
                         MetalCanvas(scene:model.scene,renderer:renderer) {model.alert=StudioAlert(message:$0)}
                     } else {Text("无法创建画布").foregroundStyle(Theme.secondary)}
+                    if model.recipe.method == .deconstruction && model.scene.fragments.isEmpty {
+                        VStack(spacing:10) {
+                            Image(systemName:"photo.on.rectangle.angled").font(.system(size:30))
+                            Text("导入至少一张参考图片").font(.system(size:14,weight:.medium))
+                            Text("图片会被分块，保留原有纹理与局部形状").font(.system(size:11))
+                        }.foregroundStyle(Color.black.opacity(0.55)).allowsHitTesting(false)
+                    }
                     if let crop=model.exportSettings.crop {
                         CropOverlay(crop:Binding(get:{model.exportSettings.crop ?? crop},set:{model.exportSettings.crop=$0}),outputAspect:Double(model.exportSettings.width)/Double(model.exportSettings.height),canvasAspect:model.recipe.canvasAspect)
                     }
@@ -133,12 +144,12 @@ struct StudioView: View {
                     .position(x:proxy.size.width/2,y:proxy.size.height/2)
             }
             HStack(spacing:8) {
-                Text(model.recipe.mode == .shape ? (model.recipe.shapeDisplay == .outline ? "单色线条" : "单色块面") : (model.recipe.mode == .color ? "色块 · 无描边" : "色块 + 线条"))
+                Text(model.recipe.method == .deconstruction ? "原图碎片 · 保留纹理" : (model.recipe.mode == .shape ? (model.recipe.shapeDisplay == .outline ? "单色线条" : "单色块面") : (model.recipe.mode == .color ? "色块 · 无描边" : "色块 + 线条")))
                 Text("·")
                 Text("sRGB")
                 Spacer()
-                Button("换颜色") {model.randomize(shape:false)}.disabled(model.recipe.colorLocked || model.recipe.mode == .shape)
-                Button("换结构") {model.randomize(color:false)}.disabled(model.recipe.shapeLocked)
+                Button(model.recipe.method == .deconstruction ? "换叠放" : "换颜色") {model.randomize(shape:false)}.disabled(model.recipe.colorLocked || (model.recipe.method == .abstract && model.recipe.mode == .shape))
+                Button(model.recipe.method == .deconstruction ? "重新分块" : "换结构") {model.randomize(color:false)}.disabled(model.recipe.shapeLocked)
             }.font(.system(size:10)).foregroundStyle(Theme.secondary).buttonStyle(.borderless).padding(.horizontal,24).frame(height:42)
         }
     }
@@ -147,6 +158,10 @@ struct StudioView: View {
         ScrollView {
             VStack(alignment:.leading,spacing:24) {
                 HStack {Text("调节构成").font(.system(size:14,weight:.semibold)); Spacer(); Image(systemName:"slider.horizontal.3").foregroundStyle(Theme.secondary)}
+                Picker("生成方式",selection:model.binding(\.method)) {ForEach(GenerationMethod.allCases,id:\.self) {Text($0.title).tag($0)}}.pickerStyle(.segmented).accessibilityIdentifier("generationMethod")
+                if model.recipe.method == .deconstruction {
+                    deconstructionControls
+                } else {
                 if model.recipe.mode == .shape {
                     Picker("形状表现",selection:model.binding(\.shapeDisplay)) {ForEach(ShapeDisplay.allCases,id:\.self) {Text($0.title).tag($0)}}.pickerStyle(.segmented)
                 }
@@ -185,9 +200,37 @@ struct StudioView: View {
                         parameter("主色占比",\.color.dominance).disabled(model.recipe.mode == .shape)
                     }.padding(.top,16)
                 }.font(.system(size:11,weight:.medium)).foregroundStyle(Theme.secondary)
+                }
                 Text("拖动保留随机基础，松开后可撤销这次调节。").font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(3)
             }.padding(20)
         }.background(Theme.panel)
+    }
+    private var deconstructionControls:some View {
+        VStack(alignment:.leading,spacing:20) {
+            Text("直接使用原图像素。打散为 0 时恢复完整图片；分块数量变化会改变附近的切分边界。").font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(4)
+            VStack(spacing:16) {
+                HStack {
+                    Text("解构与重组").font(.system(size:11,weight:.semibold))
+                    Spacer()
+                    Button {model.edit {$0.shapeLocked.toggle()}} label: {Image(systemName:model.recipe.shapeLocked ? "lock.fill" : "lock.open").foregroundStyle(model.recipe.shapeLocked ? Theme.accent : Theme.secondary)}
+                        .buttonStyle(.plain).help("锁定分块与位置的随机基础，仍允许拖动调节").accessibilityLabel("锁定解构结构")
+                    Button("重置") {model.edit {$0.deconstruction=DeconstructionParameters()}}.font(.system(size:10)).buttonStyle(.borderless).foregroundStyle(Theme.secondary)
+                }
+                VStack(spacing:5) {
+                    HStack {Text("分块数量"); Spacer(); Text("\(model.recipe.deconstruction.fragmentCount) / 张").monospacedDigit().foregroundStyle(Theme.secondary)}.font(.system(size:11))
+                    Slider(value:model.binding(\.deconstruction.granularity),onEditingChanged:model.sliderEditing).controlSize(.small).accessibilityLabel("分块数量")
+                }
+                parameter("打散程度",\.deconstruction.breakup,left:"完整原图",right:"错位重组")
+                parameter("旋转幅度",\.deconstruction.rotation)
+                parameter("碎片大小差异",\.deconstruction.sizeVariation)
+                parameter("间隙 / 重叠",\.deconstruction.overlap,left:"留出间隙",right:"相互覆盖")
+                parameter("局部关系保留",\.deconstruction.grouping,left:"独立移动",right:"成组移动")
+            }
+            Divider().overlay(Theme.line)
+            parameter("碎片边缘",\.deconstruction.softness,left:"清晰",right:"柔软")
+            Button("查看完整原图") {model.edit {$0.deconstruction.breakup=0}}.buttonStyle(.bordered).controlSize(.small)
+            Text("三张图片分别分块，按左侧层间混合叠合。原图中的人物、物体等内容也会保留。\n\n旧项目使用已保存的预览；重新导入可保存最高 4096 像素的参考。局部放大清晰度受参考分辨率限制。").font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(4)
+        }
     }
     private func groupHeader(_ title:String,reset:@escaping()->Void) -> some View {
         HStack {Text(title).font(.system(size:11,weight:.semibold)); Spacer(); Button("重置",action:reset).font(.system(size:10)).buttonStyle(.borderless).foregroundStyle(Theme.secondary)}

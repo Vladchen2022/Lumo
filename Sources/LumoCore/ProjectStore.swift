@@ -31,9 +31,9 @@ public enum ProjectStore {
     public static func validate(_ project: LumoProject) throws {
         guard (1...2).contains(project.formatVersion), project.snapshots.count <= 100 else { throw LumoError.message("项目版本不受支持，或收藏数量超过限制。") }
         for recipe in [project.recipe]+project.snapshots.map(\.recipe) {
-            guard recipe.version == 1 else { throw LumoError.message("这个项目使用了更新的生成器版本。") }
-            let normalized = [recipe.color.saturation,recipe.color.brightness,recipe.color.contrast,recipe.color.dominance,recipe.shape.density,recipe.shape.scale,recipe.shape.variation,recipe.shape.curvature,recipe.shape.stretch,recipe.shape.clustering,recipe.shape.coherence,recipe.shape.organic,recipe.shape.erosion,recipe.appearance.softness,recipe.appearance.lineWidth,recipe.appearance.lineStrength]
-            guard normalized.allSatisfy({ $0.isFinite && (0...1).contains($0) }), recipe.color.hue.isFinite, (-180...180).contains(recipe.color.hue), recipe.shape.direction.isFinite, (-180...180).contains(recipe.shape.direction), recipe.canvasAspect.isFinite, (0.25...4).contains(recipe.canvasAspect) else { throw LumoError.message("项目包含无效的调节参数。") }
+            guard (1...2).contains(recipe.version), recipe.method != .deconstruction || recipe.version == 2 else { throw LumoError.message("这个项目使用了更新的生成器版本。") }
+            let normalized = [recipe.color.saturation,recipe.color.brightness,recipe.color.contrast,recipe.color.dominance,recipe.shape.density,recipe.shape.scale,recipe.shape.variation,recipe.shape.curvature,recipe.shape.stretch,recipe.shape.clustering,recipe.shape.coherence,recipe.shape.organic,recipe.shape.erosion,recipe.appearance.softness,recipe.appearance.lineWidth,recipe.appearance.lineStrength,recipe.deconstruction.granularity,recipe.deconstruction.breakup,recipe.deconstruction.rotation,recipe.deconstruction.sizeVariation,recipe.deconstruction.overlap,recipe.deconstruction.grouping]
+            guard (normalized+[recipe.deconstruction.softness]).allSatisfy({ $0.isFinite && (0...1).contains($0) }), recipe.color.hue.isFinite, (-180...180).contains(recipe.color.hue), recipe.shape.direction.isFinite, (-180...180).contains(recipe.shape.direction), recipe.canvasAspect.isFinite, (0.25...4).contains(recipe.canvasAspect) else { throw LumoError.message("项目包含无效的调节参数。") }
             guard recipe.colorLayers.count == 3 else {throw LumoError.message("项目必须包含三个颜色层。")}
             for layer in recipe.colorLayers {
                 guard [layer.opacity,layer.blockOpacity].allSatisfy({$0.isFinite && (0...1).contains($0)}),layer.paletteOverrides.count <= 6,layer.weightOverrides.count <= 6,
@@ -43,6 +43,7 @@ public enum ProjectStore {
             for source in [recipe.colorSource,recipe.shapeSource,recipe.colorLayers[1].source,recipe.colorLayers[2].source].compactMap({$0}) {
                 guard source.thumbnail.count <= 2*1024*1024 else { throw LumoError.message("项目参考缩略图过大。") }
                 guard (source.samplingImage?.count ?? 0) <= 16*1024*1024 else {throw LumoError.message("项目取色预览过大。")}
+                guard (source.renderImage?.count ?? 0) <= 32*1024*1024 else {throw LumoError.message("项目解构图片过大。")}
                 if let palette = source.palette {
                     guard (1...12).contains(palette.count), palette.allSatisfy({ [$0.color.r,$0.color.g,$0.color.b].allSatisfy { $0.isFinite && (0...1).contains($0) } && $0.weight.isFinite && $0.weight >= 0 }), palette.reduce(0,{$0+$1.weight}) > 0 else { throw LumoError.message("项目配色数据无效。") }
                 }

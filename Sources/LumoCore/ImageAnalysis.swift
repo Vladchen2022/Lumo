@@ -40,6 +40,8 @@ public enum ReferenceAnalyzer {
             var reference = SourceReference(name:url.lastPathComponent,thumbnail:thumbnail as Data,palette:cluster(samples))
             var samplingOptions = options; samplingOptions[kCGImageSourceThumbnailMaxPixelSize] = 2048
             if let preview = CGImageSourceCreateThumbnailAtIndex(source,0,samplingOptions as CFDictionary), let data = try? ReferencePixels.png(preview), data.count <= 16*1024*1024 {reference.samplingImage = data}
+            var renderOptions = options; renderOptions[kCGImageSourceThumbnailMaxPixelSize] = 4096
+            if let full = CGImageSourceCreateThumbnailAtIndex(source,0,renderOptions as CFDictionary), let data = try? ReferencePixels.png(full), data.count <= 32*1024*1024 {reference.renderImage = data}
             return reference
         }
         return SourceReference(name:url.lastPathComponent,thumbnail:thumbnail as Data,features:try features(gray,width:width,height:height))
@@ -113,11 +115,12 @@ public enum ReferenceAnalyzer {
     }
 }
 
-/// Color-managed, oriented reference pixels used only by the picker, never by scene generation.
+/// Color-managed, oriented pixels for picking and the explicit image-deconstruction mode.
 public struct ReferencePixels: @unchecked Sendable {
     public let image: CGImage
     public let width: Int, height: Int
     private let pixels: [UInt8]
+    public var rgbaBytes: [UInt8] {pixels}
     public init(data: Data) throws {
         guard let source = CGImageSourceCreateWithData(data as CFData,nil), let image = CGImageSourceCreateImageAtIndex(source,0,nil), image.width*image.height <= 16_777_216 else {throw LumoError.message("无法读取取色预览。")}
         self.image = image; width = image.width; height = image.height

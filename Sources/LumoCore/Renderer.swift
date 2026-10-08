@@ -12,12 +12,21 @@ private struct MeshVertex {
 }
 private struct RenderUniforms { var viewport: SIMD4<Float> }
 private struct LayerUniforms { var opacity: Float; var blend: UInt32 }
+private struct FragmentVertex {
+    var position: SIMD2<Float>
+    var uv: SIMD2<Float>
+    var alpha: Float
+    var blend: UInt32
+}
 
 public final class MetalRenderer: @unchecked Sendable {
     public let device: MTLDevice
     public let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
     private let compositePipeline: MTLRenderPipelineState
+    private let fragmentPipeline: MTLRenderPipelineState
+    private let textureLock = NSLock()
+    private var sourceTextures: [(Data,MTLTexture)] = []
     public init() throws {
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { throw LumoError.message("这台 Mac 无法创建 Metal 画布。") }
         self.device = device; self.queue = queue
@@ -34,6 +43,9 @@ public final class MetalRenderer: @unchecked Sendable {
         descriptor.vertexFunction = library.makeFunction(name: "lumoCompositeVertex")
         descriptor.fragmentFunction = library.makeFunction(name: "lumoCompositeFragment")
         compositePipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        descriptor.vertexFunction = library.makeFunction(name:"lumoImageVertex")
+        descriptor.fragmentFunction = library.makeFunction(name:"lumoImageFragment")
+        fragmentPipeline = try device.makeRenderPipelineState(descriptor:descriptor)
     }
     public func encode(scene: AbstractScene, viewport: CGRect, pass: MTLRenderPassDescriptor, command: MTLCommandBuffer) throws {
         guard let target = pass.colorAttachments[0].texture else {throw LumoError.message("画布缺少输出纹理。")}
@@ -54,9 +66,23 @@ public final class MetalRenderer: @unchecked Sendable {
         for index in scene.layers.indices {
             let layer = scene.layers[index]
             guard layer.enabled, layer.opacity > 0, index == 0 || layer.source != nil else {continue}
+            if scene.method == .deconstruction && layer.source == nil {continue}
             let layerPass = MTLRenderPassDescriptor()
             layerPass.colorAttachments[0].texture = texture; layerPass.colorAttachments[0].loadAction = .clear; layerPass.colorAttachments[0].clearColor = MTLClearColorMake(0,0,0,0); layerPass.colorAttachments[0].storeAction = .store
-            try draw(Self.mesh(scene:scene,layer:index),layerPass)
+            if scene.method == .deconstruction, let source = layer.source {
+                let sourceTexture = try sourceTexture(data:source.deconstructionImage)
+                let vertices = Self.fragmentMesh(scene:scene,layer:index)
+                if !vertices.isEmpty {
+                    guard let buffer = vertices.withUnsafeBytes({device.makeBuffer(bytes:$0.baseAddress!,length:$0.count,options:.storageModeShared)}), let encoder = command.makeRenderCommandEncoder(descriptor:layerPass) else {throw LumoError.message("无法绘制图像碎片。")}
+                    var uniforms = RenderUniforms(viewport:SIMD4(Float(viewport.minX),Float(viewport.minY),Float(viewport.width),Float(viewport.height)))
+                    encoder.setRenderPipelineState(fragmentPipeline)
+                    encoder.setVertexBuffer(buffer,offset:0,index:0)
+                    encoder.setVertexBytes(&uniforms,length:MemoryLayout<RenderUniforms>.stride,index:1)
+                    encoder.setFragmentTexture(sourceTexture,index:0)
+                    encoder.drawPrimitives(type:.triangle,vertexStart:0,vertexCount:vertices.count)
+                    encoder.endEncoding()
+                }
+            } else {try draw(Self.mesh(scene:scene,layer:index),layerPass)}
             let outputPass = MTLRenderPassDescriptor(); outputPass.colorAttachments[0].texture = target; outputPass.colorAttachments[0].loadAction = .load; outputPass.colorAttachments[0].storeAction = .store
             guard let encoder = command.makeRenderCommandEncoder(descriptor:outputPass) else {throw LumoError.message("无法合成颜色层。")}
             var settings = LayerUniforms(opacity:Float(layer.opacity),blend:scene.mode == .shape ? 0 : UInt32(layer.blend.rawValue))
@@ -65,6 +91,62 @@ public final class MetalRenderer: @unchecked Sendable {
             encoder.setFragmentBytes(&settings,length:MemoryLayout<LayerUniforms>.stride,index:0)
             encoder.drawPrimitives(type:.triangle,vertexStart:0,vertexCount:3); encoder.endEncoding()
         }
+    }
+    private func sourceTexture(data: Data) throws -> MTLTexture {
+        textureLock.lock(); defer {textureLock.unlock()}
+        if let cached = sourceTextures.first(where:{$0.0 == data}) {return cached.1}
+        let source = try ReferencePixels(data:data)
+        var pixels = source.rgbaBytes
+        // Unpremultiply in sRGB before upload; the sRGB texture then decodes RGB to linear light.
+        for i in stride(from:0,to:pixels.count,by:4) {
+            let alpha = Int(pixels[i+3])
+            if alpha > 0 && alpha < 255 {for j in 0..<3 {pixels[i+j] = UInt8(min(255,(Int(pixels[i+j])*255+alpha/2)/alpha))}}
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat:.rgba8Unorm_srgb,width:source.width,height:source.height,mipmapped:false)
+        descriptor.storageMode = .shared; descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor:descriptor) else {throw LumoError.message("原图纹理内存不足，请缩小参考图。")}
+        pixels.withUnsafeBytes {texture.replace(region:MTLRegionMake2D(0,0,source.width,source.height),mipmapLevel:0,withBytes:$0.baseAddress!,bytesPerRow:source.width*4)}
+        sourceTextures.insert((data,texture),at:0)
+        if sourceTextures.count > 4 {sourceTextures.removeLast()}
+        return texture
+    }
+    private static func fragmentMesh(scene: AbstractScene, layer: Int) -> [FragmentVertex] {
+        var vertices: [FragmentVertex] = []
+        let settings = scene.layers[layer]
+        let alpha = Float(settings.blockOpacity), blend = UInt32(settings.blockBlend.rawValue)
+        func vertex(_ position: SIMD2<Float>, _ uv: SIMD2<Float>, _ opacity: Float) -> FragmentVertex {FragmentVertex(position:position,uv:uv,alpha:opacity,blend:blend)}
+        func triangle(_ a: FragmentVertex, _ b: FragmentVertex, _ c: FragmentVertex) {vertices.append(contentsOf:[a,b,c])}
+        for fragment in scene.fragments where fragment.layer == layer {
+            let points = fragment.contour, uv = fragment.textureCoordinates, count = points.count
+            guard count >= 3 else {continue}
+            let clearance = points.indices.map {i -> Float in
+                let edge = points[(i+1)%count]-points[i], local = fragment.center-points[i]
+                return abs(edge.x*local.y-edge.y*local.x)/max(simd_length(edge),0.000001)
+            }.min() ?? 0
+            // A site can be close to a cell edge. Keep the inward feather ring around the site
+            // so its triangle fan cannot fold or overlap at high softness or fine partitioning.
+            let feather = min(clearance*0.8,Float(scene.appearance.softness*0.025))
+            let center = vertex(fragment.center,fragment.sourceCenter,alpha)
+            let normals = points.indices.map {i -> SIMD2<Float> in
+                let e1 = points[i]-points[(i+count-1)%count], e2 = points[(i+1)%count]-points[i]
+                let a = e1/max(simd_length(e1),0.000001), b = e2/max(simd_length(e2),0.000001)
+                let n1 = SIMD2(a.y,-a.x), n2 = SIMD2(b.y,-b.x), sum = n1+n2
+                let normal = sum/max(simd_length(sum),0.000001)
+                return normal/max(0.5,simd_dot(normal,n2))
+            }
+            for i in points.indices {
+                let j = (i+1)%count
+                let ai = vertex(points[i]-normals[i]*feather*0.5,uv[i],alpha)
+                let aj = vertex(points[j]-normals[j]*feather*0.5,uv[j],alpha)
+                triangle(center,ai,aj)
+                if feather > 0 {
+                    let bi = vertex(points[i]+normals[i]*feather*0.5,uv[i],0)
+                    let bj = vertex(points[j]+normals[j]*feather*0.5,uv[j],0)
+                    triangle(ai,bi,bj); triangle(ai,bj,aj)
+                }
+            }
+        }
+        return vertices
     }
     public func image(scene: AbstractScene, width: Int, height: Int, crop: CropRegion? = nil) throws -> CGImage {
         guard (1...4096).contains(width), (1...4096).contains(height) else { throw LumoError.message("导出宽高必须在 1–4096 像素之间。") }

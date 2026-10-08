@@ -1,5 +1,31 @@
 import Foundation
 
+public enum GenerationMethod: String, Codable, CaseIterable, Sendable {
+    case abstract, deconstruction
+    public var title: String {self == .abstract ? "抽象生成" : "图像解构"}
+}
+public struct DeconstructionParameters: Codable, Equatable, Sendable {
+    public var granularity = 0.45
+    public var breakup = 0.50
+    public var rotation = 0.30
+    public var sizeVariation = 0.35
+    public var overlap = 0.55
+    public var grouping = 0.60
+    public var softness = 0.10
+    public init() {}
+    public var fragmentCount: Int {8 + Int((granularity * 72).rounded())}
+    private enum CodingKeys: String, CodingKey {case granularity, breakup, rotation, sizeVariation, overlap, grouping, softness}
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy:CodingKeys.self)
+        granularity = try c.decodeIfPresent(Double.self,forKey:.granularity) ?? 0.45
+        breakup = try c.decodeIfPresent(Double.self,forKey:.breakup) ?? 0.5
+        rotation = try c.decodeIfPresent(Double.self,forKey:.rotation) ?? 0.3
+        sizeVariation = try c.decodeIfPresent(Double.self,forKey:.sizeVariation) ?? 0.35
+        overlap = try c.decodeIfPresent(Double.self,forKey:.overlap) ?? 0.55
+        grouping = try c.decodeIfPresent(Double.self,forKey:.grouping) ?? 0.6
+        softness = try c.decodeIfPresent(Double.self,forKey:.softness) ?? 0.1
+    }
+}
 public enum DisplayMode: String, Codable, CaseIterable, Sendable {
     case color, shape, combined
     public var title: String { switch self { case .color: "颜色"; case .shape: "形状"; case .combined: "组合" } }
@@ -41,10 +67,11 @@ public struct SourceReference: Codable, Equatable, Sendable {
     public var palette: [PaletteEntry]?
     public var features: ShapeFeatures?
     public var samplingImage: Data?
+    public var renderImage: Data?
     public init(name: String, thumbnail: Data, palette: [PaletteEntry]? = nil, features: ShapeFeatures? = nil) {
         self.id = UUID(); self.name = name; self.thumbnail = thumbnail; self.palette = palette; self.features = features
     }
-    private enum CodingKeys: String, CodingKey {case id, name, thumbnail, palette, features, samplingImage, thumbnailRef, samplingImageRef}
+    private enum CodingKeys: String, CodingKey {case id, name, thumbnail, palette, features, samplingImage, renderImage, thumbnailRef, samplingImageRef, renderImageRef}
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self,forKey:.id)
@@ -60,6 +87,7 @@ public struct SourceReference: Codable, Equatable, Sendable {
         }
         guard let thumbnail = try asset(.thumbnail,.thumbnailRef) else {throw LumoError.message("项目缺少参考缩略图。")}
         self.thumbnail = thumbnail; samplingImage = try asset(.samplingImage,.samplingImageRef)
+        renderImage = try asset(.renderImage,.renderImageRef)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -68,8 +96,10 @@ public struct SourceReference: Codable, Equatable, Sendable {
         if let archive = encoder.userInfo[.referenceArchive] as? ReferenceArchive {
             try c.encode(archive.insert(thumbnail),forKey:.thumbnailRef)
             if let samplingImage {try c.encode(archive.insert(samplingImage),forKey:.samplingImageRef)}
+            if let renderImage {try c.encode(archive.insert(renderImage),forKey:.renderImageRef)}
         } else {
             try c.encode(thumbnail,forKey:.thumbnail); try c.encodeIfPresent(samplingImage,forKey:.samplingImage)
+            try c.encodeIfPresent(renderImage,forKey:.renderImage)
         }
     }
 }
@@ -151,6 +181,8 @@ public enum CompositionPreset: String, CaseIterable, Sendable {
 }
 public struct GenerationRecipe: Codable, Equatable, Sendable {
     public var version = 1
+    public var method = GenerationMethod.abstract
+    public var deconstruction = DeconstructionParameters()
     public var colorSeed: UInt64 = 0xCAFE_42
     public var shapeSeed: UInt64 = 0xBEEF_31
     public var mode = DisplayMode.combined
@@ -178,10 +210,12 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
         colorLayers[index] = value
         if index == 0 {colorSource = value.source; colorLayers[0].source = nil}
     }
-    private enum CodingKeys: String, CodingKey {case version, colorSeed, shapeSeed, mode, shapeDisplay, color, shape, appearance, colorSource, colorLayers, shapeSource, colorLocked, shapeLocked, canvasAspect}
+    private enum CodingKeys: String, CodingKey {case version, method, deconstruction, colorSeed, shapeSeed, mode, shapeDisplay, color, shape, appearance, colorSource, colorLayers, shapeSource, colorLocked, shapeLocked, canvasAspect}
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = try c.decode(Int.self,forKey:.version)
+        method = try c.decodeIfPresent(GenerationMethod.self,forKey:.method) ?? .abstract
+        deconstruction = try c.decodeIfPresent(DeconstructionParameters.self,forKey:.deconstruction) ?? DeconstructionParameters()
         colorSeed = try c.decode(UInt64.self,forKey:.colorSeed); shapeSeed = try c.decode(UInt64.self,forKey:.shapeSeed)
         mode = try c.decode(DisplayMode.self,forKey:.mode); shapeDisplay = try c.decode(ShapeDisplay.self,forKey:.shapeDisplay)
         color = try c.decode(ColorParameters.self,forKey:.color); shape = try c.decode(ShapeParameters.self,forKey:.shape)
@@ -193,6 +227,7 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
         canvasAspect = try c.decode(Double.self,forKey:.canvasAspect)
     }
     public mutating func apply(_ preset: CompositionPreset) {
+        method = .abstract; version = 1
         shape = ShapeParameters(); appearance = AppearanceParameters()
         switch preset {
         case .geometric: shape.curvature = 0.05; shape.density = 0.32; mode = .color
