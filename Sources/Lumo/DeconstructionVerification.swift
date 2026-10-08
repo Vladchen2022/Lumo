@@ -5,10 +5,10 @@ import LumoCore
 
 enum DeconstructionVerification {
     static func run(projectURL: URL) throws {
-        let root = URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("artifacts/deconstruction",isDirectory:true)
+        let root = URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("artifacts/deconstruction-range",isDirectory:true)
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
         var project = try ProjectStore.open(projectURL)
-        project.recipe.method = .deconstruction; project.recipe.version = 2
+        project.recipe.method = .deconstruction; project.recipe.version = 3; project.recipe.deconstruction.expandedTransforms = true
         project.recipe.deconstruction.granularity = 0.7
         project.recipe.deconstruction.breakup = 0.62
         project.recipe.deconstruction.rotation = 0.45

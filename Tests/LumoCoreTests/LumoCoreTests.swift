@@ -279,7 +279,7 @@ final class LumoCoreTests:XCTestCase {
         try fixture(url,width:240,height:160) {c in c.setFillColor(CGColor(srgbRed:0.2,green:0.5,blue:0.8,alpha:1)); c.fill(CGRect(x:0,y:0,width:240,height:160))}
         var r = GenerationRecipe(); r.colorSource = try ReferenceAnalyzer.analyze(url:url,forColor:true)
         let abstract = SceneGenerator.generate(r)
-        r.method = .deconstruction; r.version = 2
+        r.method = .deconstruction; r.version = 3
         let original = SceneGenerator.generate(r)
         XCTAssertEqual(original,SceneGenerator.generate(r)); XCTAssertTrue(original.shapes.isEmpty)
         for amount in [0.0,0.4,1.0] {
@@ -324,23 +324,25 @@ final class LumoCoreTests:XCTestCase {
             c.setFillColor(CGColor(srgbRed:1,green:0,blue:1,alpha:1)); c.fill(CGRect(x:201,y:51,width:1,height:1))
         }
         var r = GenerationRecipe(); r.colorSource = try ReferenceAnalyzer.analyze(url:url,forColor:true)
-        r.method = .deconstruction; r.version = 2; r.canvasAspect = 4.0/3
+        r.method = .deconstruction; r.version = 3; r.canvasAspect = 4.0/3
         r.color.hue = 135; r.setLayer(0) {$0.paletteOverrides[0] = .init(0,0,0)}
         r.deconstruction.breakup = 0; r.deconstruction.softness = 1
         let renderer = try MetalRenderer()
         let expected = try ReferencePixels(data:r.colorSource!.deconstructionImage).rgbaBytes
-        for density in [0.0,0.45,1.0] {
+        for expanded in [false,true] {for density in [0.0,0.45,1.0] {
+            r.deconstruction.expandedTransforms=expanded; r.version=expanded ? 3 : 2
+            r.deconstruction.rotation=1; r.deconstruction.sizeVariation=1
             r.deconstruction.granularity = density
             let image = try renderer.image(scene:SceneGenerator.generate(r),width:256,height:192)
             let actual = Array(image.dataProvider!.data! as Data)
             var differences = 0
             for i in stride(from:0,to:actual.count,by:4) {for (a,b) in [(i,i+2),(i+1,i+1),(i+2,i),(i+3,i+3)] {if abs(Int(actual[a])-Int(expected[b])) > 2 {differences += 1}}}
             XCTAssertLessThan(differences,20,"Every source pixel, including the one-pixel accent, must reassemble without holes or flips")
-        }
+        }}
     }
     func testDeconstructionThreeLayersOfflinePersistenceAndCrop() throws {
         let root = try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
-        var project = LumoProject(); project.recipe.method = .deconstruction; project.recipe.version = 2
+        var project = LumoProject(); project.recipe.method = .deconstruction; project.recipe.version = 3
         project.recipe.deconstruction.softness = 1; project.recipe.deconstruction.granularity = 1
         for layer in 0..<3 {
             let url = root.appendingPathComponent("layer\(layer).png")
@@ -373,7 +375,7 @@ final class LumoCoreTests:XCTestCase {
         let root = try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
         let url = root.appendingPathComponent("alpha.png")
         try fixture(url,width:64,height:64) {c in c.setFillColor(CGColor(srgbRed:0.8,green:0.2,blue:0.4,alpha:0.5)); c.fill(CGRect(x:0,y:0,width:32,height:64))}
-        var r = GenerationRecipe(); r.method = .deconstruction; r.version = 2; r.deconstruction.breakup = 0
+        var r = GenerationRecipe(); r.method = .deconstruction; r.version = 3; r.deconstruction.breakup = 0
         r.colorSource = try ReferenceAnalyzer.analyze(url:url,forColor:true)
         let scene = SceneGenerator.generate(r), renderer = try MetalRenderer()
         let image = try renderer.image(scene:scene,width:64,height:64), bytes = Array(image.dataProvider!.data! as Data)
@@ -384,6 +386,109 @@ final class LumoCoreTests:XCTestCase {
             let linear = Double((base[channel]+source[channel])/2)
             let expected = linear <= 0.0031308 ? linear*12.92 : 1.055*pow(linear,1/2.4)-0.055
             XCTAssertEqual(Double(bytes[left+offset])/255,expected,accuracy:0.015)
+        }
+    }
+    func testExpandedFragmentRangesAndLegacyRecipes() throws {
+        let root=try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
+        let url=root.appendingPathComponent("range.png")
+        try fixture(url,width:200,height:200) {c in c.setFillColor(CGColor(srgbRed:0.8,green:0.3,blue:0.1,alpha:1)); c.fill(CGRect(x:0,y:0,width:200,height:200))}
+        var r=GenerationRecipe(); r.method = .deconstruction; r.version=3
+        r.colorSource=try ReferenceAnalyzer.analyze(url:url,forColor:true)
+        r.deconstruction.granularity=1; r.deconstruction.breakup=0.39
+        r.deconstruction.grouping=0; r.deconstruction.rotation=0; r.deconstruction.sizeVariation=0; r.deconstruction.overlap=1
+        let original=SceneGenerator.generate(r)
+        func headings(_ scene:AbstractScene) -> [Int:Double] {
+            Dictionary(uniqueKeysWithValues:scene.fragments.map {f in
+                let v=f.contour[1]-f.contour[0]; return (f.id,atan2(Double(v.y),Double(v.x)))
+            })
+        }
+        var previous=headings(original), turns=[Int:Double]()
+        for step in 1...40 {
+            r.deconstruction.rotation=Double(step)/40
+            let angles=headings(SceneGenerator.generate(r))
+            for (id,angle) in angles {
+                let difference=angle-previous[id]!
+                turns[id,default:0]+=atan2(sin(difference),cos(difference))
+            }
+            previous=angles
+        }
+        XCTAssertGreaterThan(turns.values.map {abs($0)*180 / .pi}.max()!,330,"Rotation must allow almost a complete turn at only 39% breakup")
+        XCTAssertLessThanOrEqual(turns.values.map {abs($0)}.max()!,2 * .pi+0.0001)
+        r.deconstruction.rotation=0; XCTAssertEqual(SceneGenerator.generate(r),original)
+        r.deconstruction.grouping=0.42
+        let baseline=SceneGenerator.generate(r)
+        func area(_ points:[SIMD2<Float>]) -> Double {
+            abs(points.indices.reduce(0.0) {sum,i in let j=(i+1)%points.count; return sum+Double(points[i].x)*Double(points[j].y)-Double(points[j].x)*Double(points[i].y)})/2
+        }
+        let originalAreas=Dictionary(uniqueKeysWithValues:baseline.fragments.map {($0.id,area($0.contour))})
+        r.deconstruction.sizeVariation=1
+        let wide=SceneGenerator.generate(r)
+        let scales=wide.fragments.map {sqrt(area($0.contour)/originalAreas[$0.id]!)}
+        XCTAssertLessThan(scales.min()!,0.18); XCTAssertGreaterThan(scales.max()!,2.7)
+        XCTAssertGreaterThan(scales.max()!/scales.min()!,15,"Small and large pieces must have substantially different scales")
+        r.deconstruction.sizeVariation=0; XCTAssertEqual(SceneGenerator.generate(r),baseline)
+        r.deconstruction.sizeVariation=1; r.deconstruction.breakup=0
+        let reassembled=SceneGenerator.generate(r)
+        r.deconstruction.rotation=1; r.deconstruction.sizeVariation=0; r.deconstruction.overlap=0
+        XCTAssertEqual(reassembled,SceneGenerator.generate(r),"Zero breakup must restore source geometry regardless of rotation or scale")
+
+        var old=r; old.version=2; old.deconstruction.expandedTransforms=false; old.deconstruction.breakup=0.39
+        var json=try JSONSerialization.jsonObject(with:JSONEncoder().encode(old)) as! [String:Any]
+        var parameters=json["deconstruction"] as! [String:Any]; parameters.removeValue(forKey:"expandedTransforms"); json["deconstruction"]=parameters
+        let restored=try JSONDecoder().decode(GenerationRecipe.self,from:JSONSerialization.data(withJSONObject:json))
+        XCTAssertFalse(restored.deconstruction.expandedTransforms)
+        XCTAssertEqual(SceneGenerator.generate(old),SceneGenerator.generate(restored),"0.3 recipes must keep their existing geometry")
+        var project=LumoProject(); project.recipe=restored
+        XCTAssertNoThrow(try ProjectStore.validate(project))
+        project.recipe=r; project.recipe.deconstruction.expandedTransforms=true; project.recipe.version=3
+        let saved=root.appendingPathComponent("expanded.lumo"); try ProjectStore.save(project,to:saved)
+        XCTAssertEqual(try ProjectStore.open(saved).recipe,project.recipe)
+    }
+    func testFreeRectangleDrawingEdgesMovementAndOutputDimensions() throws {
+        let crop=CropRegion.selecting(from:CGPoint(x:0.1,y:0.2),to:CGPoint(x:0.8,y:0.45))
+        XCTAssertEqual(crop.width,0.7,accuracy:0.000001); XCTAssertEqual(crop.height,0.25,accuracy:0.000001)
+        XCTAssertEqual(crop,CropRegion.selecting(from:CGPoint(x:0.8,y:0.45),to:CGPoint(x:0.1,y:0.2)))
+        let right=crop.resized(.right,to:CGPoint(x:0.9,y:0.95))
+        XCTAssertEqual(right.height,crop.height); XCTAssertEqual(right.y,crop.y); XCTAssertEqual(right.width,0.8,accuracy:0.000001)
+        let top=crop.resized(.top,to:CGPoint(x:0.95,y:0.05))
+        XCTAssertEqual(top.width,crop.width); XCTAssertEqual(top.x,crop.x); XCTAssertEqual(top.height,0.4,accuracy:0.000001)
+        for handle in CropHandle.allCases {
+            let resized=crop.resized(handle,to:CGPoint(x:-2,y:3))
+            XCTAssertGreaterThan(resized.width,0); XCTAssertGreaterThan(resized.height,0)
+            XCTAssertGreaterThanOrEqual(resized.x,0); XCTAssertGreaterThanOrEqual(resized.y,0)
+            XCTAssertLessThanOrEqual(resized.x+resized.width,1.000001); XCTAssertLessThanOrEqual(resized.y+resized.height,1.000001)
+        }
+        let moved=crop.moved(by:CGSize(width:3,height:-3))
+        XCTAssertEqual(moved.width,crop.width); XCTAssertEqual(moved.height,crop.height)
+        XCTAssertEqual(moved.x+crop.width,1,accuracy:0.000001); XCTAssertEqual(moved.y,0)
+        var invalid=LumoProject(); invalid.export.crop=CropRegion(x:0,y:0,width:1,height:1e-309)
+        XCTAssertThrowsError(try ProjectStore.validate(invalid))
+        for canvas in [0.75,1,16.0/9] {for shape in [crop,top,CropRegion(x:0.25,y:0.05,width:0.09,height:0.8)] {for edge in [1024,2048,4096,1733] {
+            var p=LumoProject(); p.recipe.canvasAspect=canvas; p.export.crop=shape
+            let aspect=shape.aspect(canvasAspect:canvas); p.export.matchAspect(aspect,longEdge:edge)
+            XCTAssertEqual(max(p.export.width,p.export.height),edge)
+            XCTAssertEqual(Double(p.export.width)/Double(p.export.height),aspect,accuracy:aspect/Double(min(p.export.width,p.export.height)))
+            XCTAssertNoThrow(try ProjectStore.validate(p))
+        }}}
+    }
+    func testGPUFreeRectangularCropMatchesSceneAndBothExportFormats() throws {
+        let renderer=try MetalRenderer(); var recipe=GenerationRecipe(); recipe.canvasAspect=4.0/3
+        let scene=SceneGenerator.generate(recipe), full=try renderer.image(scene:scene,width:640,height:480)
+        let crop=CropRegion(x:0.125,y:0.25,width:0.5,height:0.25)
+        let local=try renderer.image(scene:scene,width:320,height:120,crop:crop)
+        let a=Array(full.dataProvider!.data! as Data), b=Array(local.dataProvider!.data! as Data)
+        var differences=0
+        for y in 0..<120 {for x in 0..<320 {for channel in 0..<4 {
+            if abs(Int(a[((y+120)*640+x+80)*4+channel])-Int(b[(y*320+x)*4+channel]))>2 {differences+=1}
+        }}}
+        XCTAssertLessThan(differences,100,"A freely chosen rectangle must retain the same content and proportions")
+        let root=try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
+        for format in ImageFormat.allCases {
+            var settings=ExportSettings(); settings.crop=crop; settings.matchAspect(crop.aspect(canvasAspect:scene.aspect),longEdge:1024); settings.format=format
+            let url=root.appendingPathComponent("free.\(format.rawValue)"); try renderer.export(scene:scene,settings:settings,to:url)
+            let source=CGImageSourceCreateWithURL(url as CFURL,nil)!, props=CGImageSourceCopyPropertiesAtIndex(source,0,nil) as! [CFString:Any]
+            XCTAssertEqual(props[kCGImagePropertyPixelWidth] as? Int,1024); XCTAssertEqual(props[kCGImagePropertyPixelHeight] as? Int,384)
+            XCTAssertNotNil(props[kCGImagePropertyProfileName])
         }
     }
     private func temporaryDirectory() throws -> URL {let url=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); try FileManager.default.createDirectory(at:url,withIntermediateDirectories:true); return url}

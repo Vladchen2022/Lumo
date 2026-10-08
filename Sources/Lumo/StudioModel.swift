@@ -11,6 +11,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     @Published private(set) var snapshots: [SavedSnapshot] = []
     @Published var exportSettings = ExportSettings()
     @Published var showExportSheet = false
+    @Published var isCropping = false
     @Published var alert: StudioAlert?
     @Published var status = "拖动滑块，探索同一张构成的变化"
     @Published var importingColor = false
@@ -39,7 +40,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     }
     func edit(_ action: (inout GenerationRecipe) -> Void) {
         let before = recipe; var next = recipe; action(&next)
-        next.version = next.method == .deconstruction ? 2 : 1
+        next.version = next.method == .deconstruction ? (next.deconstruction.expandedTransforms ? 3 : 2) : 1
         guard next != before else { return }
         recipe = next; history.record(before:before,after:next); scene = SceneGenerator.generate(next)
         if before.canvasAspect != next.canvasAspect { resetExportAspect() }
@@ -49,6 +50,11 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     }
     func binding<T>(_ keyPath: WritableKeyPath<GenerationRecipe,T>) -> Binding<T> {
         Binding(get:{self.recipe[keyPath:keyPath]},set:{newValue in self.edit {$0[keyPath:keyPath]=newValue}})
+    }
+    func expandedBinding(_ keyPath: WritableKeyPath<GenerationRecipe,Double>) -> Binding<Double> {
+        Binding(get:{self.recipe[keyPath:keyPath]},set:{value in
+            self.edit {$0[keyPath:keyPath]=value; $0.deconstruction.expandedTransforms=true}
+        })
     }
     func undo() { if let next = history.undo(recipe) { recipe = next; scene = SceneGenerator.generate(next); resetExportAspect() } }
     func redo() { if let next = history.redo(recipe) { recipe = next; scene = SceneGenerator.generate(next); resetExportAspect() } }
@@ -115,14 +121,19 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     func deleteSnapshot(_ id: UUID) {snapshots.removeAll {$0.id==id}}
     func resetExportAspect() {
         exportSettings.crop=nil
-        let longest = max(exportSettings.width,exportSettings.height)
-        if recipe.canvasAspect >= 1 {exportSettings.width=longest; exportSettings.height=max(1,Int(Double(longest)/recipe.canvasAspect))}
-        else {exportSettings.height=longest; exportSettings.width=max(1,Int(Double(longest)*recipe.canvasAspect))}
+        isCropping=false
+        exportSettings.matchAspect(recipe.canvasAspect)
     }
-    func prepareCrop(width: Int, height: Int, format: ImageFormat) {
-        exportSettings.width=width; exportSettings.height=height; exportSettings.format=format
-        exportSettings.crop=CropRegion.centered(outputAspect:Double(width)/Double(height),canvasAspect:recipe.canvasAspect)
-        status="拖动框内移动、角点缩放；按 Esc 或点击「退出框选」结束"
+    func prepareCrop(longEdge: Int, format: ImageFormat) {
+        exportSettings.format=format
+        exportSettings.crop=nil
+        isCropping=true
+        exportSettings.matchAspect(recipe.canvasAspect,longEdge:longEdge)
+        status="自由矩形：拖动画布建立选区，框内移动，边或角调整；Esc 退出"
+    }
+    func updateCrop(_ crop: CropRegion) {
+        exportSettings.crop=crop
+        exportSettings.matchAspect(crop.aspect(canvasAspect:recipe.canvasAspect))
     }
     func finishCrop() {resetExportAspect(); status="已退出框选，画面保持不变"}
     func exportImage(settings: ExportSettings) {

@@ -31,7 +31,7 @@ public enum ProjectStore {
     public static func validate(_ project: LumoProject) throws {
         guard (1...2).contains(project.formatVersion), project.snapshots.count <= 100 else { throw LumoError.message("项目版本不受支持，或收藏数量超过限制。") }
         for recipe in [project.recipe]+project.snapshots.map(\.recipe) {
-            guard (1...2).contains(recipe.version), recipe.method != .deconstruction || recipe.version == 2 else { throw LumoError.message("这个项目使用了更新的生成器版本。") }
+            guard (1...3).contains(recipe.version), recipe.method != .deconstruction || recipe.version == (recipe.deconstruction.expandedTransforms ? 3 : 2) else { throw LumoError.message("这个项目使用了更新的生成器版本。") }
             let normalized = [recipe.color.saturation,recipe.color.brightness,recipe.color.contrast,recipe.color.dominance,recipe.shape.density,recipe.shape.scale,recipe.shape.variation,recipe.shape.curvature,recipe.shape.stretch,recipe.shape.clustering,recipe.shape.coherence,recipe.shape.organic,recipe.shape.erosion,recipe.appearance.softness,recipe.appearance.lineWidth,recipe.appearance.lineStrength,recipe.deconstruction.granularity,recipe.deconstruction.breakup,recipe.deconstruction.rotation,recipe.deconstruction.sizeVariation,recipe.deconstruction.overlap,recipe.deconstruction.grouping]
             guard (normalized+[recipe.deconstruction.softness]).allSatisfy({ $0.isFinite && (0...1).contains($0) }), recipe.color.hue.isFinite, (-180...180).contains(recipe.color.hue), recipe.shape.direction.isFinite, (-180...180).contains(recipe.shape.direction), recipe.canvasAspect.isFinite, (0.25...4).contains(recipe.canvasAspect) else { throw LumoError.message("项目包含无效的调节参数。") }
             guard recipe.colorLayers.count == 3 else {throw LumoError.message("项目必须包含三个颜色层。")}
@@ -55,7 +55,10 @@ public enum ProjectStore {
         guard (1...4096).contains(project.export.width), (1...4096).contains(project.export.height) else { throw LumoError.message("项目导出尺寸无效。") }
         if let crop = project.export.crop {
             guard [crop.x,crop.y,crop.width,crop.height].allSatisfy(\.isFinite), crop.x >= 0, crop.y >= 0, crop.width > 0, crop.height > 0, crop.x+crop.width <= 1.000001, crop.y+crop.height <= 1.000001 else { throw LumoError.message("项目裁切区域无效。") }
-            guard abs((crop.width*project.recipe.canvasAspect/crop.height)/(Double(project.export.width)/Double(project.export.height))-1) < 0.002 else { throw LumoError.message("项目裁切比例与导出尺寸不一致。") }
+            let aspect=crop.aspect(canvasAspect:project.recipe.canvasAspect)
+            guard aspect.isFinite, aspect>0, Float(crop.width)>0, Float(crop.height)>0 else {throw LumoError.message("项目裁切比例无效。")}
+            let fitted=ExportSettings.dimensions(aspect:aspect,longEdge:max(project.export.width,project.export.height))
+            guard abs(fitted.width-project.export.width)<=1, abs(fitted.height-project.export.height)<=1 else { throw LumoError.message("项目裁切比例与导出尺寸不一致。") }
         } else {
             guard abs((Double(project.export.width)/Double(project.export.height))/project.recipe.canvasAspect-1) < 0.02 else { throw LumoError.message("整张导出的尺寸比例与画布不一致。") }
         }

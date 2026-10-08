@@ -46,6 +46,10 @@ public enum DeconstructionGenerator {
     public static func generate(_ recipe: GenerationRecipe) -> AbstractScene {
         let layers = (0..<3).map {recipe.layer($0)}
         let p = recipe.deconstruction
+        // A short, smooth transition preserves exact reassembly at zero while giving
+        // rotation and size their full range once breakup reaches 20%.
+        let progress = min(1,p.breakup/0.2)
+        let activation = progress*progress*(3-2*progress)
         var fragments: [ImageFragment] = []
         for index in layers.indices {
             guard let source = layers[index].source else {continue}
@@ -65,8 +69,9 @@ public enum DeconstructionGenerator {
                 let groupAngle = (groupRandom.unit()-0.5)*2*Double.pi
                 var random = SeededRandom(seed:seed &+ UInt64(id+1) &* 0x9E3779B97F4A7C15)
                 let target = SIMD2(random.unit()*recipe.canvasAspect,random.unit())
-                let independentAngle = (random.unit()-0.5)*2*Double.pi*p.rotation*p.breakup
-                let coherentAngle = groupAngle*p.rotation*p.breakup
+                let rotationFactor = p.expandedTransforms ? 2*activation : p.breakup
+                let independentAngle = (random.unit()-0.5)*2*Double.pi*p.rotation*rotationFactor
+                let coherentAngle = groupAngle*p.rotation*rotationFactor
                 let pivot = origin+SIMD2((Double(gx)+0.5)/3*width,(Double(gy)+0.5)/3*height)
                 let relative = originalCenter-pivot
                 let rotated = SIMD2(relative.x*cos(coherentAngle)-relative.y*sin(coherentAngle),relative.x*sin(coherentAngle)+relative.y*cos(coherentAngle))
@@ -74,7 +79,17 @@ public enum DeconstructionGenerator {
                 let independentCenter = originalCenter+(target-originalCenter)*p.breakup
                 let center = independentCenter*(1-p.grouping)+coherentCenter*p.grouping
                 let angle = independentAngle*(1-p.grouping)+coherentAngle*p.grouping
-                let size = max(0.25,1+p.breakup*((p.overlap-0.5)*0.9+(random.unit()-0.5)*p.sizeVariation*1.1))
+                let sizeSample = random.unit()
+                let size: Double
+                if p.expandedTransforms {
+                    // Logarithmic scaling creates a wide ratio without zero or negative sizes.
+                    // At maximum variation: 0.15× to 3×, before the shared overlap multiplier.
+                    let signed = sizeSample*2-1
+                    let logarithm = signed*(signed<0 ? log(1/0.15) : log(3))
+                    size = (1+p.breakup*(p.overlap-0.5)*0.9)*exp(logarithm*p.sizeVariation*activation)
+                } else {
+                    size = max(0.25,1+p.breakup*((p.overlap-0.5)*0.9+(sizeSample-0.5)*p.sizeVariation*1.1))
+                }
                 let c = cos(angle), s = sin(angle)
                 let contour = cell.contour.map {point -> SIMD2<Float> in
                     let local = (point-cell.center)*height*size

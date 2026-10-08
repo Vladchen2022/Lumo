@@ -50,7 +50,7 @@ struct StudioView: View {
                 Picker("显示模式",selection:model.binding(\.mode)) {ForEach(DisplayMode.allCases,id:\.self) {Text($0.title).tag($0)}}
                     .pickerStyle(.segmented).frame(width:210).accessibilityIdentifier("displayMode")
             } else {
-                Label("图像解构 · 试验",systemImage:"square.on.square.dashed").font(.system(size:12,weight:.medium)).foregroundStyle(Theme.accent).frame(width:210,alignment:.leading)
+                Label("图像解构",systemImage:"square.on.square.dashed").font(.system(size:12,weight:.medium)).foregroundStyle(Theme.accent).frame(width:210,alignment:.leading)
             }
             Menu {ForEach(CompositionPreset.allCases,id:\.self) {preset in Button(preset.title) {model.apply(preset)}}} label: {Label("起始构成",systemImage:"square.grid.2x2")}
                 .menuStyle(.borderlessButton).fixedSize()
@@ -60,11 +60,14 @@ struct StudioView: View {
                 Button {model.redo()} label: {Image(systemName:"arrow.uturn.forward")}.disabled(!model.canRedo).help("重做 ⇧⌘Z")
             }.buttonStyle(.borderless)
             Button {model.addSnapshot()} label: {Label("收藏",systemImage:"bookmark")}.buttonStyle(.bordered)
-            if model.exportSettings.crop != nil {
+            if model.isCropping {
                 Button {model.finishCrop()} label: {Label("退出框选",systemImage:"xmark.circle.fill")}
                     .buttonStyle(.bordered).help("退出框选 · Esc").accessibilityIdentifier("exitCrop")
+            } else {
+                Button {model.prepareCrop(longEdge:max(model.exportSettings.width,model.exportSettings.height),format:model.exportSettings.format)} label: {Label("框选局部",systemImage:"crop")}
+                    .buttonStyle(.bordered).accessibilityIdentifier("startCrop")
             }
-            Button {model.showExportSheet=true} label: {Label(model.exportSettings.crop == nil ? "框选 / 导出" : "导出选区",systemImage:"square.and.arrow.up")}
+            Button {model.showExportSheet=true} label: {Label(model.isCropping ? "导出选区" : "导出…",systemImage:"square.and.arrow.up")}
                 .buttonStyle(.borderedProminent).foregroundStyle(Theme.background).disabled(model.renderer == nil || model.isExporting)
         }.controlSize(.small).padding(.horizontal,18).frame(height:58)
     }
@@ -110,9 +113,10 @@ struct StudioView: View {
     private var workspace:some View {
         VStack(spacing:0) {
             HStack {
-                Text(model.exportSettings.crop == nil ? "构成画布" : "框选局部").font(.system(size:11,weight:.medium)).foregroundStyle(Theme.secondary)
+                Text(model.isCropping ? "框选局部" : "构成画布").font(.system(size:11,weight:.medium)).foregroundStyle(Theme.secondary)
                 Spacer()
-                if model.exportSettings.crop != nil {
+                if model.isCropping {
+                    Button("重新框选") {model.prepareCrop(longEdge:max(model.exportSettings.width,model.exportSettings.height),format:model.exportSettings.format)}.buttonStyle(.borderless).font(.system(size:10))
                     Text("Esc 退出").font(.system(size:10))
                 } else {
                     Menu {
@@ -137,8 +141,8 @@ struct StudioView: View {
                             Text("图片会被分块，保留原有纹理与局部形状").font(.system(size:11))
                         }.foregroundStyle(Color.black.opacity(0.55)).allowsHitTesting(false)
                     }
-                    if let crop=model.exportSettings.crop {
-                        CropOverlay(crop:Binding(get:{model.exportSettings.crop ?? crop},set:{model.exportSettings.crop=$0}),outputAspect:Double(model.exportSettings.width)/Double(model.exportSettings.height),canvasAspect:model.recipe.canvasAspect)
+                    if model.isCropping {
+                        CropOverlay(crop:Binding(get:{model.exportSettings.crop},set:{if let crop=$0 {model.updateCrop(crop)}}),canvasAspect:model.recipe.canvasAspect,longEdge:max(model.exportSettings.width,model.exportSettings.height))
                     }
                 }.frame(width:width,height:height).contentShape(Rectangle()).clipped().shadow(color:.black.opacity(0.28),radius:20,y:8)
                     .position(x:proxy.size.width/2,y:proxy.size.height/2)
@@ -221,8 +225,12 @@ struct StudioView: View {
                     Slider(value:model.binding(\.deconstruction.granularity),onEditingChanged:model.sliderEditing).controlSize(.small).accessibilityLabel("分块数量")
                 }
                 parameter("打散程度",\.deconstruction.breakup,left:"完整原图",right:"错位重组")
-                parameter("旋转幅度",\.deconstruction.rotation)
-                parameter("碎片大小差异",\.deconstruction.sizeVariation)
+                parameter("旋转幅度",\.deconstruction.rotation,angle:true,displayScale:model.recipe.deconstruction.expandedTransforms ? 360 : 180*model.recipe.deconstruction.breakup,left:"不旋转",right:"顺 / 逆时针",expanded:true)
+                parameter("碎片大小差异",\.deconstruction.sizeVariation,left:"原始大小",right:model.recipe.deconstruction.expandedTransforms ? "0.15× — 3×" : "启用扩展范围",expanded:true)
+                if !model.recipe.deconstruction.expandedTransforms {
+                    Button("启用扩展调节") {model.edit {$0.deconstruction.expandedTransforms=true}}.buttonStyle(.bordered).controlSize(.small)
+                    Text("当前保留旧版画面；调节旋转或大小将启用扩展范围，可撤销。").font(.system(size:9)).foregroundStyle(Theme.secondary)
+                }
                 parameter("间隙 / 重叠",\.deconstruction.overlap,left:"留出间隙",right:"相互覆盖")
                 parameter("局部关系保留",\.deconstruction.grouping,left:"独立移动",right:"成组移动")
             }
@@ -235,10 +243,10 @@ struct StudioView: View {
     private func groupHeader(_ title:String,reset:@escaping()->Void) -> some View {
         HStack {Text(title).font(.system(size:11,weight:.semibold)); Spacer(); Button("重置",action:reset).font(.system(size:10)).buttonStyle(.borderless).foregroundStyle(Theme.secondary)}
     }
-    private func parameter(_ name:String,_ path:WritableKeyPath<GenerationRecipe,Double>,range:ClosedRange<Double>=0...1,angle:Bool=false,left:String?=nil,right:String?=nil) -> some View {
+    private func parameter(_ name:String,_ path:WritableKeyPath<GenerationRecipe,Double>,range:ClosedRange<Double>=0...1,angle:Bool=false,displayScale:Double=1,left:String?=nil,right:String?=nil,expanded:Bool=false) -> some View {
         VStack(spacing:5) {
-            HStack {Text(name).font(.system(size:11)); Spacer(); Text(angle ? "\(Int(model.recipe[keyPath:path].rounded()))°" : "\(Int((model.recipe[keyPath:path]*100).rounded()))").font(.system(size:10,design:.monospaced)).foregroundStyle(Theme.secondary)}
-            Slider(value:model.binding(path),in:range,onEditingChanged:model.sliderEditing).controlSize(.small).accessibilityLabel(name).accessibilityIdentifier(name)
+            HStack {Text(name).font(.system(size:11)); Spacer(); Text(angle ? "\(Int((model.recipe[keyPath:path]*displayScale).rounded()))°" : "\(Int((model.recipe[keyPath:path]*100).rounded()))").font(.system(size:10,design:.monospaced)).foregroundStyle(Theme.secondary)}
+            Slider(value:expanded ? model.expandedBinding(path) : model.binding(path),in:range,onEditingChanged:model.sliderEditing).controlSize(.small).accessibilityLabel(name).accessibilityIdentifier(name)
             if let left,let right {HStack {Text(left); Spacer(); Text(right)}.font(.system(size:9)).foregroundStyle(Theme.secondary)}
         }
     }

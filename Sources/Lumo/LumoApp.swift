@@ -20,7 +20,7 @@ import LumoCore
     func applicationDidFinishLaunching(_ notification:Notification) {
         NSApplication.shared.activate(ignoringOtherApps:true)
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching:.keyDown) {[weak self] event in
-            if event.keyCode == 53, NSApp.modalWindow == nil, NSApp.keyWindow?.attachedSheet == nil, let model = self?.model, model.exportSettings.crop != nil, model.alert == nil, !model.showExportSheet, !model.showColorPicker {
+            if event.keyCode == 53, NSApp.modalWindow == nil, NSApp.keyWindow?.attachedSheet == nil, let model = self?.model, model.isCropping, model.alert == nil, !model.showExportSheet, !model.showColorPicker {
                 model.finishCrop(); return nil
             }
             return event
@@ -57,7 +57,7 @@ struct LumoApp:App {
                     Button("重做") {model.redo()}.keyboardShortcut("z",modifiers:[.command,.shift]).disabled(!model.canRedo)
                 }
                 CommandMenu("构成") {
-                    Button("退出框选") {model.finishCrop()}.disabled(model.exportSettings.crop == nil)
+                    Button("退出框选") {model.finishCrop()}.disabled(!model.isCropping)
                     Divider()
                     Button("全部随机") {model.randomize()}.keyboardShortcut("r").disabled(model.recipe.colorLocked && model.recipe.shapeLocked)
                     Button("收藏当前构成") {model.addSnapshot()}.keyboardShortcut("d")

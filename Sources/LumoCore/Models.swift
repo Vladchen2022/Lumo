@@ -1,10 +1,12 @@
 import Foundation
+import CoreGraphics
 
 public enum GenerationMethod: String, Codable, CaseIterable, Sendable {
     case abstract, deconstruction
     public var title: String {self == .abstract ? "抽象生成" : "图像解构"}
 }
 public struct DeconstructionParameters: Codable, Equatable, Sendable {
+    public var expandedTransforms = true
     public var granularity = 0.45
     public var breakup = 0.50
     public var rotation = 0.30
@@ -14,9 +16,11 @@ public struct DeconstructionParameters: Codable, Equatable, Sendable {
     public var softness = 0.10
     public init() {}
     public var fragmentCount: Int {8 + Int((granularity * 72).rounded())}
-    private enum CodingKeys: String, CodingKey {case granularity, breakup, rotation, sizeVariation, overlap, grouping, softness}
+    private enum CodingKeys: String, CodingKey {case expandedTransforms, granularity, breakup, rotation, sizeVariation, overlap, grouping, softness}
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy:CodingKeys.self)
+        // Missing in 0.3 projects: retain their original construction until explicitly adjusted.
+        expandedTransforms = try c.decodeIfPresent(Bool.self,forKey:.expandedTransforms) ?? false
         granularity = try c.decodeIfPresent(Double.self,forKey:.granularity) ?? 0.45
         breakup = try c.decodeIfPresent(Double.self,forKey:.breakup) ?? 0.5
         rotation = try c.decodeIfPresent(Double.self,forKey:.rotation) ?? 0.3
@@ -243,11 +247,36 @@ public struct CropRegion: Codable, Equatable, Sendable {
     public var x: Double, y: Double, width: Double, height: Double
     public init(x: Double, y: Double, width: Double, height: Double) { self.x = x; self.y = y; self.width = width; self.height = height }
     public func viewport(aspect: Double) -> CGRect { CGRect(x: x * aspect, y: y, width: width * aspect, height: height) }
+    public func aspect(canvasAspect: Double) -> Double {width*canvasAspect/height}
+    public static func selecting(from start: CGPoint, to end: CGPoint, minimumSize: CGSize = CGSize(width:0.015,height:0.015)) -> CropRegion {
+        let ax=min(1,max(0,start.x)), ay=min(1,max(0,start.y))
+        let bx=min(1,max(0,end.x)), by=min(1,max(0,end.y))
+        let w=min(1,max(minimumSize.width,abs(bx-ax))), h=min(1,max(minimumSize.height,abs(by-ay)))
+        return CropRegion(x:max(0,min(1-w,min(ax,bx))),y:max(0,min(1-h,min(ay,by))),width:w,height:h)
+    }
+    public func moved(by delta: CGSize) -> CropRegion {
+        CropRegion(x:min(1-width,max(0,x+delta.width)),y:min(1-height,max(0,y+delta.height)),width:width,height:height)
+    }
+    public func resized(_ handle: CropHandle, to point: CGPoint, minimumSize: CGSize = CGSize(width:0.015,height:0.015)) -> CropRegion {
+        var left=x, right=x+width, top=y, bottom=y+height
+        if handle.movesLeft {left=max(0,min(right-min(minimumSize.width,width),point.x))}
+        if handle.movesRight {right=min(1,max(left+min(minimumSize.width,width),point.x))}
+        if handle.movesTop {top=max(0,min(bottom-min(minimumSize.height,height),point.y))}
+        if handle.movesBottom {bottom=min(1,max(top+min(minimumSize.height,height),point.y))}
+        return CropRegion(x:left,y:top,width:right-left,height:bottom-top)
+    }
     public static func centered(outputAspect: Double, canvasAspect: Double, fraction: Double = 0.72) -> CropRegion {
         let ratio = outputAspect / canvasAspect
         let width = min(fraction, fraction * ratio), height = width / ratio
         return CropRegion(x: (1 - width) / 2, y: (1 - height) / 2, width: width, height: height)
     }
+}
+public enum CropHandle: CaseIterable, Hashable, Sendable {
+    case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left
+    public var movesLeft: Bool {self == .left || self == .topLeft || self == .bottomLeft}
+    public var movesRight: Bool {self == .right || self == .topRight || self == .bottomRight}
+    public var movesTop: Bool {self == .top || self == .topLeft || self == .topRight}
+    public var movesBottom: Bool {self == .bottom || self == .bottomLeft || self == .bottomRight}
 }
 public enum ImageFormat: String, Codable, CaseIterable, Sendable { case png, jpeg; public var title: String { self == .png ? "PNG" : "JPEG" } }
 public struct ExportSettings: Codable, Equatable, Sendable {
@@ -255,6 +284,16 @@ public struct ExportSettings: Codable, Equatable, Sendable {
     public var format = ImageFormat.png
     public var crop: CropRegion?
     public init() {}
+    public static func dimensions(aspect: Double, longEdge: Int) -> (width:Int,height:Int) {
+        let edge=min(4096,max(1,longEdge))
+        guard aspect.isFinite, aspect>0 else {return (edge,edge)}
+        if aspect>=1 {return (edge,max(1,Int((Double(edge)/aspect).rounded())))}
+        return (max(1,Int((Double(edge)*aspect).rounded())),edge)
+    }
+    public mutating func matchAspect(_ aspect: Double, longEdge: Int? = nil) {
+        let dimensions=Self.dimensions(aspect:aspect,longEdge:longEdge ?? max(width,height))
+        width=dimensions.width; height=dimensions.height
+    }
 }
 public struct SavedSnapshot: Codable, Equatable, Identifiable, Sendable {
     public var id = UUID()
