@@ -2,6 +2,16 @@
 
 原生 macOS 构成工具。抽象生成从颜色及结构统计生成色块、轮廓和单色线条；新增图像解构直接保留参考像素、纹理与局部形状，分块后重新拼接。所有处理在本机完成。
 
+Lumo is an open-source native macOS tool for abstract compositions, image deconstruction, and iterative visual studies. Built with SwiftUI and Metal, all processing runs locally.
+
+**Lumo 以 [MIT 许可证](LICENSE) 开源。** 源码允许使用、修改及分发，完整条件见许可证。公开仓库为 [Vladchen2022/Lumo](https://github.com/Vladchen2022/Lumo)。
+
+## 下载与安装
+
+从 [Releases](https://github.com/Vladchen2022/Lumo/releases) 下载 `Lumo-0.4.0-macOS-arm64.zip`，解压后把 `Lumo.app` 拖进“应用程序”文件夹。要求 macOS 14+ 和 Apple Silicon；Intel Mac 尚未验证。
+
+下载包包含 App、MIT 许可证、安装说明，另提供 SHA-256 校验文件。发布应用使用本机临时签名，尚未进行 Developer ID 签名和 Apple 公证，首次启动可能受 macOS 安全检查限制。兼容性与性能的实测范围见 [VALIDATION.md](VALIDATION.md)。
+
 ## 运行与构建
 
 要求 macOS 14+、Apple Silicon 和 Xcode。当前验证机使用 Xcode 自带的 Swift 6.4；源码使用 Swift 5 语言模式，不依赖第三方包。
@@ -12,6 +22,14 @@ open dist/Lumo.app
 ```
 
 应用位于 `dist/Lumo.app`，可以移到“应用程序”目录。构建脚本使用本机临时签名；本首版供本机试用，尚未进行 Developer ID 签名和公证。
+
+生成包含许可证和安装说明的 App 下载包：
+
+```sh
+bash Scripts/export-app.sh
+```
+
+下载包与校验文件输出到 `dist/`。本项目不包含用户参考图片、`.lumo` 试用项目或本机测试输出；这些文件留在被 Git 忽略的 `artifacts/` 中。
 
 ## 使用
 
@@ -58,19 +76,19 @@ open dist/Lumo.app
 
 ## Git 与回退
 
-仓库在本项目目录，当前分支为 `improvement/fixed-effect-stages`。改动前的 0.3.1 保留在 `improvement/deconstruction-range-and-free-crop`，提交 `977f542`、标签 `lumo-0.3.1-wide-controls-free-crop`。0.3 原版留在 `experiment/image-deconstruction`，提交 `912bc15`、标签 `lumo-0.3-deconstruction-trial`。抽象生成基线是 `0512943`，标签 `lumo-0.2-before-deconstruction`，`main` 保留该版本。没有创建远程仓库。
+公开仓库的 `main` 为最新版本。历史回退点：0.3.1 为 `977f542` / `lumo-0.3.1-wide-controls-free-crop`；0.3 为 `912bc15` / `lumo-0.3-deconstruction-trial`；0.2 为 `0512943` / `lumo-0.2-before-deconstruction`。所有标签均保留，首次开源发布标签为 `v0.4.0`。
 
 退出 Lumo 后，在工作区没有未提交修改时可以回到 0.2 并重建：
 
 ```sh
-git switch main
+git switch --detach lumo-0.2-before-deconstruction
 bash Scripts/build-app.sh
 ```
 
 重新试用新模式：
 
 ```sh
-git switch improvement/fixed-effect-stages
+git switch main
 bash Scripts/build-app.sh
 ```
 
@@ -94,7 +112,7 @@ bash Scripts/build-app.sh
 swift test
 bash Scripts/build-app.sh
 dist/Lumo.app/Contents/MacOS/Lumo --verify
-dist/Lumo.app/Contents/MacOS/Lumo --verify-deconstruction artifacts/upgrade/ui-0.2.lumo
+dist/Lumo.app/Contents/MacOS/Lumo --verify-deconstruction artifacts/verification/workflow.lumo
 ```
 
 `--verify` 在 `artifacts/verification` 生成测试参考、项目、模式示例、2048×1536 局部 PNG、4096×4096 JPEG 和 `report.json`。它执行三张颜色参考和形状参考导入、原图取色、有机调节、分层混合、锁定、收藏、删除原图后的项目恢复、带色彩配置导出，并测量 1536 像素、最大密度组合模式的渲染耗时。
