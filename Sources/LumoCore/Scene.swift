@@ -31,6 +31,10 @@ public struct AbstractScene: Codable, Equatable, Sendable {
     public var layers: [ColorLayer] = []
     public var method: GenerationMethod = .abstract
     public var fragments: [ImageFragment] = []
+    public var lineInput: SourceReference?
+    public var lineParameters: LineExtractionParameters?
+    /// Derived mask; never stored in a project recipe.
+    public var lineMask: Data?
 }
 public enum SceneGenerator {
     public static func palette(for recipe: GenerationRecipe, layer index: Int = 0, adjusted: Bool = true, sixSlots: Bool = false) -> [PaletteEntry] {
@@ -69,6 +73,9 @@ public enum SceneGenerator {
         return originals.enumerated().map { PaletteEntry(adjusted ? adjust($0.element.color, parameters: recipe.color) : $0.element.color, weights[$0.offset] / sum) }
     }
     public static func generate(_ recipe: GenerationRecipe) -> AbstractScene {
+        if recipe.lineExtraction.enabled, let fixed = recipe.fixedCanvas {
+            return AbstractScene(aspect:recipe.canvasAspect,background:.white,shapes:[],mode:.color,shapeDisplay:.solid,appearance:recipe.appearance,lineInput:fixed.reference,lineParameters:recipe.lineExtraction)
+        }
         if recipe.method == .deconstruction {return DeconstructionGenerator.generate(recipe)}
         if let fixed=recipe.fixedCanvas, fixed.geometry != nil {return FixedSceneGenerator.generate(recipe,fixed:fixed)}
         let palette = palette(for: recipe)

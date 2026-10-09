@@ -1,20 +1,20 @@
-# Lumo 0.4 · 固定效果与多轮处理
+# Lumo 0.5 · 固定画面提线
 
 原生 macOS 构成工具。抽象生成从颜色及结构统计生成色块、轮廓和单色线条；新增图像解构直接保留参考像素、纹理与局部形状，分块后重新拼接。所有处理在本机完成。
 
-Lumo is an open-source native macOS tool for abstract compositions, image deconstruction, and iterative visual studies. Built with SwiftUI and Metal, all processing runs locally.
+Lumo is an open-source native macOS tool for abstract compositions, image deconstruction, iterative visual studies, and LineTop-based line extraction. Built with SwiftUI and Metal, all processing runs locally.
 
 **Lumo 以 [MIT 许可证](LICENSE) 开源。** 源码允许使用、修改及分发，完整条件见许可证。公开仓库为 [Vladchen2022/Lumo](https://github.com/Vladchen2022/Lumo)。
 
 ## 下载与安装
 
-从 [Releases](https://github.com/Vladchen2022/Lumo/releases) 下载 `Lumo-0.4.0-macOS-arm64.zip`，解压后把 `Lumo.app` 拖进“应用程序”文件夹。要求 macOS 14+ 和 Apple Silicon；Intel Mac 尚未验证。
+从 [Releases](https://github.com/Vladchen2022/Lumo/releases) 下载 `Lumo-0.5.0-macOS-arm64.zip`，解压后把 `Lumo.app` 拖进“应用程序”文件夹。要求 macOS 14+ 和 Apple Silicon；Intel Mac 尚未验证。
 
 下载包包含 App、MIT 许可证、安装说明，另提供 SHA-256 校验文件。发布应用使用本机临时签名，尚未进行 Developer ID 签名和 Apple 公证，首次启动可能受 macOS 安全检查限制。兼容性与性能的实测范围见 [VALIDATION.md](VALIDATION.md)。
 
 ## 运行与构建
 
-要求 macOS 14+、Apple Silicon 和 Xcode。当前验证机使用 Xcode 自带的 Swift 6.4；源码使用 Swift 5 语言模式，不依赖第三方包。
+要求 macOS 14+、Apple Silicon 和 Xcode。当前验证机使用 Xcode 自带的 Swift 6.4；源码使用 Swift 5 语言模式。线条提取静态链接仓库内的 arm64 OpenCV core/imgproc 与两个 contrib 算法源文件，无需安装 LineTop、Python 或 OpenCV。第三方许可及源码重建方法见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ```sh
 bash Scripts/build-app.sh
@@ -31,6 +31,17 @@ bash Scripts/export-app.sh
 
 下载包与校验文件输出到 `dist/`。本项目不包含用户参考图片、`.lumo` 试用项目或本机测试输出；这些文件留在被 Git 忽略的 `artifacts/` 中。
 
+## 固定画面提线
+
+1. 完成抽象生成、拼贴或图像解构后，点击“固定当前效果”。
+2. 点击左侧阶段输入下方的“抽取线条”（⇧⌘L）。提取对象是上方固定的整张画布；若又调整了构成，请先再次固定。
+3. 在右侧选择“照片／插画”，调透明度、对比度、亮度／阈值倾向、粗细和细节阈值。照片模式去噪更强、线条较淡；插画模式保留更多短线、线条较深。粗细沿用 LineTop 的整数像素扩张规则，并非每个微小滑块变化都会增加一个像素。
+4. 默认白底线稿，可选择“叠加在固定原图上”。点击“返回构成”恢复原参数与布局；再次提线保留上次提线参数。支持撤销／重做、收藏、项目保存与重开。
+5. 继续使用原来的整图或自由矩形导出。长边 1024／2048／4096 或自定义，短边按实际比例取整，PNG／JPEG 嵌入 sRGB。默认输出白底线稿，叠加开启时输出原图与线条的合成。
+6. 线稿还可再次固定，成为下一轮解构或提线的输入；固定前自动留下阶段记录。
+
+提线复用 LineTop 的 EdgeDrawing、Zhang–Suen 细化、连通区域去噪和照片／插画预设。始终分析整张固定图，预览和导出共享同一遮罩，局部导出不会重新检测选区边缘。提线参数更新在后台合并计算，完成前保留上一张有效预览并暂缓导出；透明度和背景叠加即时绘制。新版本支持旧项目，含提线参数的版本 5 项目需要 Lumo 0.5+。
+
 ## 使用
 
 1. 分别导入颜色和形状参考，或直接从随机构成开始。颜色来源支持三张图片，可以逐层替换，也可以用“导入三张…”批量导入，按文件名顺序放入层 1–3。支持 PNG、JPEG、HEIC、TIFF。
@@ -46,7 +57,7 @@ bash Scripts/export-app.sh
 
 取色优先使用当前导入的原图像素；项目重开或原文件不可用时，使用项目内最长 2048 像素的取色预览。0.1 项目只含原来的缩略图，若需要更细的取色精度，重新导入该参考。所有取样统一转换到 sRGB，透明位置不作为色标。
 
-快捷键：⌘N 新建、⌘O 打开、⌘S 保存、⇧⌘S 另存、⌘Z 撤销、⇧⌘Z 重做、⌘R 随机、⌘D 收藏、⇧⌘F 固定当前效果、⇧⌘E 导出。
+快捷键：⌘N 新建、⌘O 打开、⌘S 保存、⇧⌘S 另存、⌘Z 撤销、⇧⌘Z 重做、⌘R 随机、⌘D 收藏、⇧⌘F 固定当前效果、⇧⌘L 抽取线条、⇧⌘E 导出。
 
 ## 固定当前效果
 

@@ -56,7 +56,7 @@ struct ExportSheet:View {
                         dismiss()
                         DispatchQueue.main.async {model.exportImage(settings:settings)}
                     }
-                }.buttonStyle(.borderedProminent).foregroundStyle(Theme.background).disabled(!valid || model.isExporting).keyboardShortcut(.defaultAction)
+                }.buttonStyle(.borderedProminent).foregroundStyle(Theme.background).disabled(!valid || !model.canExport).keyboardShortcut(.defaultAction)
             }
         }.padding(28).frame(width:420).background(Theme.panel).preferredColorScheme(.dark).tint(Theme.accent)
     }

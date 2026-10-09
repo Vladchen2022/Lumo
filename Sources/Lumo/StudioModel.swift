@@ -21,6 +21,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     @Published var importingShape = false
     @Published var isExporting = false
     @Published private(set) var isFixing = false
+    @Published private(set) var isProcessingLines = false
     @Published private(set) var projectURL: URL?
     let renderer: MetalRenderer?
     private var history = RecipeHistory()
@@ -29,7 +30,10 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     private var layerRequests = [UUID(),UUID(),UUID()]
     private var originalURLs: [UUID:URL] = [:]
     private var fixRequest=UUID()
-    var canFix: Bool {renderer != nil && !isFixing && !isExporting && !importingColor && !importingShape && (recipe.method != .deconstruction || !scene.fragments.isEmpty)}
+    private var lineRequest=UUID()
+    private var lineTask: Task<Void,Never>?
+    var canExport: Bool {renderer != nil && !isExporting && !isFixing && !isProcessingLines}
+    var canFix: Bool {renderer != nil && !isFixing && !isProcessingLines && !isExporting && !importingColor && !importingShape && (recipe.lineExtraction.enabled || recipe.method != .deconstruction || !scene.fragments.isEmpty)}
     var canUndo: Bool { history.canUndo }
     var canRedo: Bool { history.canRedo }
     var isDirty: Bool { project != savedProject }
@@ -44,10 +48,48 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     func edit(_ action: (inout GenerationRecipe) -> Void) {
         guard !isFixing else {return}
         let before = recipe; var next = recipe; action(&next)
-        next.version = next.fixedCanvas != nil ? 4 : (next.method == .deconstruction ? (next.deconstruction.expandedTransforms ? 3 : 2) : 1)
+        next.version = next.lineExtraction != LineExtractionParameters() ? 5 : (next.fixedCanvas != nil ? 4 : (next.method == .deconstruction ? (next.deconstruction.expandedTransforms ? 3 : 2) : 1))
         guard next != before else { return }
-        recipe = next; history.record(before:before,after:next); scene = SceneGenerator.generate(next)
+        recipe = next; history.record(before:before,after:next); refreshScene()
         if before.canvasAspect != next.canvasAspect { resetExportAspect() }
+    }
+    private func refreshScene() {
+        lineTask?.cancel(); lineRequest=UUID()
+        var candidate=SceneGenerator.generate(recipe)
+        guard candidate.lineInput != nil,let parameters=candidate.lineParameters,let renderer else {
+            isProcessingLines=false; scene=candidate; return
+        }
+        if candidate.lineInput == scene.lineInput,let previous=scene.lineParameters,
+           parameters.hasSameMask(as:previous),let mask=scene.lineMask {
+            candidate.lineMask=mask; isProcessingLines=false; scene=candidate; return
+        }
+        let request=lineRequest
+        isProcessingLines=true; status="正在抽取线条…"
+        lineTask=Task {
+            do {
+                // Coalesce slider events without blocking interaction or the last valid preview.
+                try await Task.sleep(nanoseconds:80_000_000)
+                let work=Task.detached(priority:.userInitiated) {try renderer.prepareLines(scene:candidate)}
+                let mask=try await withTaskCancellationHandler(operation:{try await work.value},onCancel:{work.cancel()})
+                try Task.checkCancellation()
+                guard lineRequest == request else {return}
+                candidate.lineMask=mask; scene=candidate; isProcessingLines=false
+                status="线条已提取；可继续调节、框选或导出"
+            } catch is CancellationError {} catch {
+                guard lineRequest == request else {return}
+                // Keep the stored composition intact if extraction fails.
+                edit {$0.lineExtraction.enabled=false}
+                alert=StudioAlert(message:error.localizedDescription); status="提线失败，已返回原构成"
+            }
+        }
+    }
+    func extractLines() {
+        guard recipe.fixedCanvas != nil,!isFixing else {return}
+        edit {$0.lineExtraction.enabled=true}
+    }
+    func returnToComposition() {
+        edit {$0.lineExtraction.enabled=false}
+        status="已返回构成；提线参数已保留"
     }
     func sliderEditing(_ editing: Bool) {
         if editing { history.begin(recipe) } else { history.end(recipe); objectWillChange.send() }
@@ -60,8 +102,8 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
             self.edit {$0[keyPath:keyPath]=value; $0.deconstruction.expandedTransforms=true}
         })
     }
-    func undo() {guard !isFixing else {return}; if let next = history.undo(recipe) { recipe = next; scene = SceneGenerator.generate(next); resetExportAspect() } }
-    func redo() {guard !isFixing else {return}; if let next = history.redo(recipe) { recipe = next; scene = SceneGenerator.generate(next); resetExportAspect() } }
+    func undo() {guard !isFixing else {return}; if let next = history.undo(recipe) { recipe = next; refreshScene(); resetExportAspect() } }
+    func redo() {guard !isFixing else {return}; if let next = history.redo(recipe) { recipe = next; refreshScene(); resetExportAspect() } }
     func fixCurrentEffect() {
         guard canFix,let renderer else {return}
         guard snapshots.count<100 else {alert=StudioAlert(message:"阶段与收藏已满 100 个，请删除不需要的记录后再固定。"); return}
@@ -83,18 +125,20 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
                 let round=next.fixedCanvas!.round
                 snapshots=candidate.snapshots
                 edit {$0=next}; resetExportAspect(); selectedColorLayer=0
-                status=next.method == .deconstruction ? "已固定第 \(round) 轮；拖动打散开始再次解构，⌘Z 可撤销固定" : "已固定第 \(round) 轮；保留布局继续变形，参数 50 为本轮起点"
+                status=before.lineExtraction.enabled ? "线稿已固定；可再次解构或抽取线条" : (next.method == .deconstruction ? "已固定第 \(round) 轮；拖动打散开始再次解构，⌘Z 可撤销固定" : "已固定第 \(round) 轮；保留布局继续变形，参数 50 为本轮起点")
             } catch {if request==fixRequest {alert=StudioAlert(message:error.localizedDescription); status="固定失败，当前画面未改变"}}
             if request==fixRequest {isFixing=false}
         }
     }
     func randomize(color: Bool = true, shape: Bool = true) {
+        guard !recipe.lineExtraction.enabled else {return}
         edit { r in if color {r.randomizeColor()}; if shape {r.randomizeShape()} }
         status = recipe.method == .deconstruction ? "已重新分块或更换碎片叠放；锁定的来源保持不变" : "已生成新的构成；锁定的来源保持不变"
     }
     func restoreIterationStart() {
         guard let fixed=recipe.fixedCanvas else {return}
         edit {r in
+            r.lineExtraction.enabled=false
             if r.method == .abstract {
                 r.color=ColorParameters(); r.shape = fixed.geometry != nil ? .continuation : (fixed.reference.features.map(ShapeParameters.init(features:)) ?? ShapeParameters())
                 r.colorSeed=fixed.colorSeed; r.shapeSeed=fixed.shapeSeed
@@ -128,7 +172,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
                 }.value
                 guard request == (color ? layerRequests[layer] : shapeRequest) else {return}
                 edit {r in
-                    r.fixedCanvas=nil
+                    r.fixedCanvas=nil; r.lineExtraction=LineExtractionParameters()
                     if color {r.setLayer(layer) {$0.source = reference; $0.enabled = true; $0.paletteOverrides = [:]; $0.weightOverrides = [:]}}
                     else {r.shapeSource = reference; if let f = reference.features {r.shape = ShapeParameters(features:f)}}
                 }
@@ -153,6 +197,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     }
     private func cancelImports() {
         fixRequest=UUID(); isFixing=false
+        lineTask?.cancel(); lineRequest=UUID(); isProcessingLines=false
         colorRequest = UUID(); shapeRequest = UUID(); layerRequests = [UUID(),UUID(),UUID()]; importingLayers = []; importingColor = false; importingShape = false
     }
     func addSnapshot() {
@@ -181,7 +226,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     }
     func finishCrop() {resetExportAspect(); status="已退出框选，画面保持不变"}
     func exportImage(settings: ExportSettings) {
-        guard let renderer, !isExporting else {return}
+        guard let renderer, canExport else {return}
         let snapshot = scene
         let panel = NSSavePanel(); panel.allowedContentTypes=settings.format == .png ? [.png] : [.jpeg]
         panel.nameFieldStringValue="Lumo-\(settings.crop == nil ? "构成" : "局部").\(settings.format == .png ? "png" : "jpg")"
@@ -221,14 +266,14 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
             let project=try ProjectStore.open(url)
             guard confirmAbandon() else {return}
             cancelImports()
-            recipe=project.recipe; snapshots=project.snapshots; exportSettings=project.export; resetExportAspect(); savedProject=self.project; projectURL=url; history=RecipeHistory(); scene=SceneGenerator.generate(recipe)
+            recipe=project.recipe; snapshots=project.snapshots; exportSettings=project.export; resetExportAspect(); savedProject=self.project; projectURL=url; history=RecipeHistory(); refreshScene()
             status="已打开 \(url.lastPathComponent)"
         } catch {alert=StudioAlert(message:error.localizedDescription)}
     }
     func newProject() {
         guard confirmAbandon() else {return}
         cancelImports()
-        let p=LumoProject(); recipe=p.recipe; snapshots=[]; exportSettings=p.export; savedProject=p; projectURL=nil; history=RecipeHistory(); scene=SceneGenerator.generate(recipe); status="新的构成"
+        let p=LumoProject(); recipe=p.recipe; snapshots=[]; exportSettings=p.export; savedProject=p; projectURL=nil; history=RecipeHistory(); refreshScene(); status="新的构成"
     }
     func profileFrame(original:GenerationRecipe,frame:Int) {
         var next=original

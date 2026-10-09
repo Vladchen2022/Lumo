@@ -25,6 +25,7 @@ public final class MetalRenderer: @unchecked Sendable {
     private let pipeline: MTLRenderPipelineState
     private let compositePipeline: MTLRenderPipelineState
     private let fragmentPipeline: MTLRenderPipelineState
+    private let lineProcessor = LineExtractionProcessor()
     private let textureLock = NSLock()
     private var sourceTextures: [(Data,MTLTexture)] = []
     public init() throws {
@@ -47,6 +48,27 @@ public final class MetalRenderer: @unchecked Sendable {
         descriptor.fragmentFunction = library.makeFunction(name:"lumoImageFragment")
         fragmentPipeline = try device.makeRenderPipelineState(descriptor:descriptor)
     }
+    public func prepareLines(scene: AbstractScene) throws -> Data {
+        guard let input = scene.lineInput, let parameters = scene.lineParameters else {throw LumoError.message("缺少固定的提线输入。")}
+        let data = try lineProcessor.mask(input:input.deconstructionImage,parameters:parameters)
+        _ = try sourceTexture(data:data)
+        return data
+    }
+    private func drawImage(data: Data, aspect: Double, opacity: Float, viewport: CGRect, target: MTLTexture, command: MTLCommandBuffer) throws {
+        let texture = try sourceTexture(data:data)
+        func v(_ x: Float, _ y: Float) -> FragmentVertex {FragmentVertex(position:SIMD2(x*Float(aspect),y),uv:SIMD2(x,y),alpha:opacity,blend:0)}
+        let vertices = [v(0,0),v(1,0),v(1,1),v(0,0),v(1,1),v(0,1)]
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture=target; pass.colorAttachments[0].loadAction = .load; pass.colorAttachments[0].storeAction = .store
+        guard let buffer=vertices.withUnsafeBytes({device.makeBuffer(bytes:$0.baseAddress!,length:$0.count,options:.storageModeShared)}),
+              let encoder=command.makeRenderCommandEncoder(descriptor:pass) else {throw LumoError.message("无法绘制线稿。")}
+        var uniforms=RenderUniforms(viewport:SIMD4(Float(viewport.minX),Float(viewport.minY),Float(viewport.width),Float(viewport.height)))
+        encoder.setRenderPipelineState(fragmentPipeline)
+        encoder.setVertexBuffer(buffer,offset:0,index:0)
+        encoder.setVertexBytes(&uniforms,length:MemoryLayout<RenderUniforms>.stride,index:1)
+        encoder.setFragmentTexture(texture,index:0)
+        encoder.drawPrimitives(type:.triangle,vertexStart:0,vertexCount:vertices.count); encoder.endEncoding()
+    }
     public func encode(scene: AbstractScene, viewport: CGRect, pass: MTLRenderPassDescriptor, command: MTLCommandBuffer) throws {
         guard let target = pass.colorAttachments[0].texture else {throw LumoError.message("画布缺少输出纹理。")}
         func draw(_ vertices: [MeshVertex], _ pass: MTLRenderPassDescriptor) throws {
@@ -60,6 +82,12 @@ public final class MetalRenderer: @unchecked Sendable {
             encoder.endEncoding()
         }
         try draw(Self.mesh(scene:scene,layer:nil,background:true),pass)
+        if let input=scene.lineInput,let parameters=scene.lineParameters {
+            let mask = try scene.lineMask ?? prepareLines(scene:scene)
+            if parameters.overlayOriginal {try drawImage(data:input.deconstructionImage,aspect:scene.aspect,opacity:1,viewport:viewport,target:target,command:command)}
+            try drawImage(data:mask,aspect:scene.aspect,opacity:Float(parameters.opacity),viewport:viewport,target:target,command:command)
+            return
+        }
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat:.bgra8Unorm_srgb,width:target.width,height:target.height,mipmapped:false)
         textureDescriptor.storageMode = .private; textureDescriptor.usage = [.renderTarget,.shaderRead]
         guard let texture = device.makeTexture(descriptor:textureDescriptor) else {throw LumoError.message("无法创建颜色层，请降低画布尺寸。")}

@@ -50,7 +50,7 @@ struct LumoApp:App {
                     Button("保存项目") {model.saveProject()}.keyboardShortcut("s")
                     Button("项目另存为…") {model.saveProject(asNew:true)}.keyboardShortcut("s",modifiers:[.command,.shift])
                     Divider()
-                    Button("导出图片…") {model.showExportSheet=true}.keyboardShortcut("e",modifiers:[.command,.shift])
+                    Button("导出图片…") {model.showExportSheet=true}.keyboardShortcut("e",modifiers:[.command,.shift]).disabled(!model.canExport)
                 }
                 CommandGroup(replacing:.undoRedo) {
                     Button("撤销") {model.undo()}.keyboardShortcut("z").disabled(!model.canUndo)
@@ -58,10 +58,12 @@ struct LumoApp:App {
                 }
                 CommandMenu("构成") {
                     Button("固定当前效果") {model.fixCurrentEffect()}.keyboardShortcut("f",modifiers:[.command,.shift]).disabled(!model.canFix)
+                    Button("抽取线条") {model.extractLines()}.keyboardShortcut("l",modifiers:[.command,.shift]).disabled(model.recipe.fixedCanvas == nil || model.isFixing || model.recipe.lineExtraction.enabled)
+                    Button("返回构成") {model.returnToComposition()}.disabled(!model.recipe.lineExtraction.enabled)
                     Divider()
                     Button("退出框选") {model.finishCrop()}.disabled(!model.isCropping)
                     Divider()
-                    Button("全部随机") {model.randomize()}.keyboardShortcut("r").disabled(model.recipe.colorLocked && model.recipe.shapeLocked)
+                    Button("全部随机") {model.randomize()}.keyboardShortcut("r").disabled(model.recipe.lineExtraction.enabled || (model.recipe.colorLocked && model.recipe.shapeLocked))
                     Button("收藏当前构成") {model.addSnapshot()}.keyboardShortcut("d")
                     Divider()
                     ForEach(CompositionPreset.allCases,id:\.self) {preset in Button(preset.title) {model.apply(preset)}}

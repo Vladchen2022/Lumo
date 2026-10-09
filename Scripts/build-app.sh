@@ -9,6 +9,8 @@ mkdir -p "$LUMO_APP/Contents/MacOS" "$LUMO_APP/Contents/Resources"
 cp "$LUMO_BIN/Lumo" "$LUMO_APP/Contents/MacOS/Lumo"
 cp "$LUMO_ROOT/Scripts/Info.plist" "$LUMO_APP/Contents/Info.plist"
 cp "$LUMO_ROOT/LICENSE" "$LUMO_APP/Contents/Resources/LICENSE.txt"
+cp "$LUMO_ROOT/THIRD_PARTY_NOTICES.md" "$LUMO_APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
+ditto "$LUMO_ROOT/Vendor/OpenCV/licenses" "$LUMO_APP/Contents/Resources/ThirdPartyLicenses"
 LUMO_BUNDLE="$(find "$LUMO_BIN" -maxdepth 1 -type d -name '*LumoCore*.bundle' -print -quit)"
 if [ -z "$LUMO_BUNDLE" ]; then
     echo "Missing LumoCore resource bundle" >&2

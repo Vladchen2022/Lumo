@@ -23,7 +23,7 @@ extension ShapeParameters {
 public enum EffectCommitter {
     /// Render the whole scene; crop overlays and export dimensions do not enter the stage.
     public static func prepare(recipe: GenerationRecipe, scene: AbstractScene, renderer: MetalRenderer, longEdge: Int = 4096) throws -> GenerationRecipe {
-        guard recipe.method != .deconstruction || !scene.fragments.isEmpty else {throw LumoError.message("请先导入参考图片再固定效果。")}
+        guard recipe.lineExtraction.enabled || recipe.method != .deconstruction || !scene.fragments.isEmpty else {throw LumoError.message("请先导入参考图片再固定效果。")}
         let dimensions=ExportSettings.dimensions(aspect:scene.aspect,longEdge:longEdge)
         let image=try renderer.image(scene:scene,width:dimensions.width,height:dimensions.height)
         let pixels=try ReferencePixels.png(image)
@@ -33,14 +33,16 @@ public enum EffectCommitter {
         reference.renderImage=pixels
         reference.features=(try? ReferenceAnalyzer.analyze(data:pixels,name:reference.name,forColor:false))?.features
         var next=recipe
-        next.fixedCanvas=FixedCanvas(round:round,reference:reference,geometry:recipe.method == .abstract ? scene : nil,colorSeed:recipe.colorSeed,shapeSeed:recipe.shapeSeed)
+        next.fixedCanvas=FixedCanvas(round:round,reference:reference,geometry:recipe.method == .abstract && !recipe.lineExtraction.enabled ? scene : nil,colorSeed:recipe.colorSeed,shapeSeed:recipe.shapeSeed)
         // All visible source layers are already baked into the captured input.
         var inputs=GenerationRecipe()
         inputs.colorSource=reference
         next.colorSource=reference; next.colorLayers=inputs.colorLayers
         next.shapeSource=reference
         next.version=4
-        if recipe.method == .deconstruction {
+        next.lineExtraction=LineExtractionParameters()
+        if recipe.lineExtraction.enabled {next.method = .deconstruction}
+        if next.method == .deconstruction {
             next.deconstruction.expandedTransforms=true
             next.deconstruction.breakup=0
             next.shapeSeed &+= 0xD1B54A32D192ED03

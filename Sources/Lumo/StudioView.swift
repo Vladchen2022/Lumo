@@ -27,7 +27,8 @@ struct StudioView: View {
             .disabled(model.isFixing)
             Divider().overlay(Theme.line)
             HStack(spacing:8) {
-                Circle().fill(model.isExporting ? Color.orange : Theme.accent).frame(width:5,height:5)
+                if model.isProcessingLines {ProgressView().controlSize(.mini)}
+                else {Circle().fill(model.isExporting ? Color.orange : Theme.accent).frame(width:5,height:5)}
                 Text(model.status).lineLimit(1)
                 Spacer()
                 Text(model.title).lineLimit(1)
@@ -47,7 +48,9 @@ struct StudioView: View {
                 Image(systemName:"square.stack.3d.up.fill").font(.system(size:18)).foregroundStyle(Theme.accent)
                 Text("LUMO").font(.system(size:15,weight:.semibold,design:.rounded)).tracking(2)
             }.frame(width:185,alignment:.leading)
-            if model.recipe.method == .abstract {
+            if model.recipe.lineExtraction.enabled {
+                Label("线条提取",systemImage:"scribble.variable").font(.system(size:12,weight:.medium)).foregroundStyle(Theme.accent).frame(width:210,alignment:.leading)
+            } else if model.recipe.method == .abstract {
                 Picker("显示模式",selection:model.binding(\.mode)) {ForEach(DisplayMode.allCases,id:\.self) {Text($0.title).tag($0)}}
                     .pickerStyle(.segmented).frame(width:210).accessibilityIdentifier("displayMode")
             } else {
@@ -71,7 +74,7 @@ struct StudioView: View {
                     .buttonStyle(.bordered).accessibilityIdentifier("startCrop")
             }
             Button {model.showExportSheet=true} label: {Label(model.isCropping ? "导出选区" : "导出…",systemImage:"square.and.arrow.up")}
-                .buttonStyle(.borderedProminent).foregroundStyle(Theme.background).disabled(model.renderer == nil || model.isExporting)
+                .buttonStyle(.borderedProminent).foregroundStyle(Theme.background).disabled(!model.canExport)
         }.controlSize(.small).padding(.horizontal,18).frame(height:58)
     }
     private var sources:some View {
@@ -79,14 +82,20 @@ struct StudioView: View {
             VStack(alignment:.leading,spacing:22) {
                 VStack(alignment:.leading,spacing:4) {
                     Text("参考来源").font(.system(size:14,weight:.semibold))
-                    Text(model.recipe.method == .abstract ? "分开取色与结构，重新构成" : "保留原图内容，分块后重新组织").font(.system(size:10)).foregroundStyle(Theme.secondary)
+                    Text(model.recipe.lineExtraction.enabled ? "从固定画面提线，保留原构成" : (model.recipe.method == .abstract ? "分开取色与结构，重新构成" : "保留原图内容，分块后重新组织")).font(.system(size:10)).foregroundStyle(Theme.secondary)
                 }
                 if let fixed=model.recipe.fixedCanvas {
                     VStack(alignment:.leading,spacing:12) {
                         Text("阶段输入 · 第 \(fixed.round) 次固定").font(.system(size:12,weight:.semibold)).foregroundStyle(Theme.accent)
                         SourceThumbnail(source:fixed.reference).equatable().frame(height:115).frame(maxWidth:.infinity).padding(6).background(Theme.inset,in:RoundedRectangle(cornerRadius:7))
-                        Text(model.recipe.method == .abstract ? (fixed.geometry != nil ? "保留固定时的布局与形状，滑块继续变形。色彩与结构以 50 为起点，方向和色相为 0；表现参数保留原值。" : "使用固定画面的色标与结构统计生成抽象构成。再次固定后，可以保留这张新构成继续变形。") : "上一轮的全部图层已合成。打散为 0 时显示固定画面，拖动打散开始再次解构。")
+                        Text(model.recipe.lineExtraction.enabled ? "当前提取上方固定画面。返回构成可继续调节；新的变化需要再次固定后提线。" : (model.recipe.method == .abstract ? (fixed.geometry != nil ? "保留固定时的布局与形状，滑块继续变形。色彩与结构以 50 为起点，方向和色相为 0；表现参数保留原值。" : "使用固定画面的色标与结构统计生成抽象构成。再次固定后，可以保留这张新构成继续变形。") : "上一轮的全部图层已合成。打散为 0 时显示固定画面，拖动打散开始再次解构。"))
                             .font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(4)
+                        if model.recipe.lineExtraction.enabled {
+                            Button("返回构成") {model.returnToComposition()}.buttonStyle(.bordered).controlSize(.small).accessibilityIdentifier("returnComposition")
+                        } else {
+                            Button {model.extractLines()} label: {Label("抽取线条",systemImage:"scribble.variable")}.buttonStyle(.borderedProminent).foregroundStyle(Theme.background).controlSize(.small).accessibilityIdentifier("extractLines")
+                            Text("提取上方固定画面的线条。要提取新的变化，请先再次固定。").font(.system(size:9)).foregroundStyle(Theme.secondary).lineSpacing(3)
+                        }
                         Button("导入新图片…") {model.importImage(color:true)}.buttonStyle(.bordered).controlSize(.small)
                         Button("恢复本轮起点") {model.restoreIterationStart()}.buttonStyle(.bordered).controlSize(.small).accessibilityIdentifier("restoreStage")
                         Text("导入后从新参考开始；可从下方阶段记录恢复。").font(.system(size:9)).foregroundStyle(Theme.secondary)
@@ -96,7 +105,7 @@ struct StudioView: View {
                     if model.recipe.method == .abstract {SourceCard(model:model,color:false)}
                 }
                 Button {model.randomize()} label: {Label("全部随机",systemImage:"shuffle").frame(maxWidth:.infinity)}
-                    .buttonStyle(.bordered).controlSize(.large).disabled(model.recipe.colorLocked && model.recipe.shapeLocked).help("尊重两个来源的锁定状态")
+                    .buttonStyle(.bordered).controlSize(.large).disabled(model.recipe.lineExtraction.enabled || (model.recipe.colorLocked && model.recipe.shapeLocked)).help("尊重两个来源的锁定状态")
                 Divider().overlay(Theme.line)
                 HStack {
                     Text("阶段与收藏").font(.system(size:12,weight:.semibold))
@@ -114,7 +123,7 @@ struct StudioView: View {
                             Button {model.restore(snapshot)} label: {
                                 HStack(spacing:9) {
                                     SnapshotPreview(recipe:snapshot.recipe).equatable().frame(width:44,height:44).clipShape(RoundedRectangle(cornerRadius:4))
-                                    VStack(alignment:.leading,spacing:4) {Text(snapshot.name).font(.system(size:11,weight:.medium)); Text(snapshot.recipe.method == .deconstruction ? "图像解构" : snapshot.recipe.mode.title).font(.system(size:10)).foregroundStyle(Theme.secondary)}
+                                    VStack(alignment:.leading,spacing:4) {Text(snapshot.name).font(.system(size:11,weight:.medium)); Text(snapshot.recipe.lineExtraction.enabled ? "线条提取" : (snapshot.recipe.method == .deconstruction ? "图像解构" : snapshot.recipe.mode.title)).font(.system(size:10)).foregroundStyle(Theme.secondary)}
                                     Spacer(minLength:0)
                                 }.contentShape(Rectangle())
                             }.buttonStyle(.plain)
@@ -139,7 +148,7 @@ struct StudioView: View {
                         Button("横向 · 4:3") {model.edit {$0.canvasAspect=4.0/3}}
                         Button("纵向 · 3:4") {model.edit {$0.canvasAspect=3.0/4}}
                         Button("宽幅 · 16:9") {model.edit {$0.canvasAspect=16.0/9}}
-                    } label: {Text(aspectTitle).font(.system(size:11))}.menuStyle(.borderlessButton).fixedSize()
+                    } label: {Text(aspectTitle).font(.system(size:11))}.menuStyle(.borderlessButton).fixedSize().disabled(model.recipe.lineExtraction.enabled)
                 }
             }.padding(.horizontal,24).frame(height:42)
             GeometryReader {proxy in
@@ -149,7 +158,7 @@ struct StudioView: View {
                     if let renderer=model.renderer {
                         MetalCanvas(scene:model.scene,renderer:renderer) {model.alert=StudioAlert(message:$0)}
                     } else {Text("无法创建画布").foregroundStyle(Theme.secondary)}
-                    if model.recipe.method == .deconstruction && model.scene.fragments.isEmpty {
+                    if model.recipe.method == .deconstruction && model.scene.fragments.isEmpty && model.scene.lineInput == nil {
                         VStack(spacing:10) {
                             Image(systemName:"photo.on.rectangle.angled").font(.system(size:30))
                             Text("导入至少一张参考图片").font(.system(size:14,weight:.medium))
@@ -163,12 +172,12 @@ struct StudioView: View {
                     .position(x:proxy.size.width/2,y:proxy.size.height/2)
             }
             HStack(spacing:8) {
-                Text(model.recipe.method == .deconstruction ? "原图碎片 · 保留纹理" : (model.recipe.mode == .shape ? (model.recipe.shapeDisplay == .outline ? "单色线条" : "单色块面") : (model.recipe.mode == .color ? "色块 · 无描边" : "色块 + 线条")))
+                Text(model.recipe.lineExtraction.enabled ? "固定画面提线" : (model.recipe.method == .deconstruction ? "原图碎片 · 保留纹理" : (model.recipe.mode == .shape ? (model.recipe.shapeDisplay == .outline ? "单色线条" : "单色块面") : (model.recipe.mode == .color ? "色块 · 无描边" : "色块 + 线条"))))
                 Text("·")
                 Text("sRGB")
                 Spacer()
-                Button(model.recipe.method == .deconstruction ? "换叠放" : "换颜色") {model.randomize(shape:false)}.disabled(model.recipe.colorLocked || (model.recipe.method == .abstract && model.recipe.mode == .shape))
-                Button(model.recipe.method == .deconstruction ? "重新分块" : "换结构") {model.randomize(color:false)}.disabled(model.recipe.shapeLocked)
+                Button(model.recipe.method == .deconstruction ? "换叠放" : "换颜色") {model.randomize(shape:false)}.disabled(model.recipe.lineExtraction.enabled || model.recipe.colorLocked || (model.recipe.method == .abstract && model.recipe.mode == .shape))
+                Button(model.recipe.method == .deconstruction ? "重新分块" : "换结构") {model.randomize(color:false)}.disabled(model.recipe.lineExtraction.enabled || model.recipe.shapeLocked)
             }.font(.system(size:10)).foregroundStyle(Theme.secondary).buttonStyle(.borderless).padding(.horizontal,24).frame(height:42)
         }
     }
@@ -177,6 +186,9 @@ struct StudioView: View {
         ScrollView {
             VStack(alignment:.leading,spacing:24) {
                 HStack {Text("调节构成").font(.system(size:14,weight:.semibold)); Spacer(); Image(systemName:"slider.horizontal.3").foregroundStyle(Theme.secondary)}
+                if model.recipe.lineExtraction.enabled {
+                    lineControls
+                } else {
                 Picker("生成方式",selection:model.binding(\.method)) {ForEach(GenerationMethod.allCases,id:\.self) {Text($0.title).tag($0)}}.pickerStyle(.segmented).accessibilityIdentifier("generationMethod")
                 if model.recipe.method == .deconstruction {
                     deconstructionControls
@@ -220,9 +232,39 @@ struct StudioView: View {
                     }.padding(.top,16)
                 }.font(.system(size:11,weight:.medium)).foregroundStyle(Theme.secondary)
                 }
-                Text("拖动保留随机基础，松开后可撤销这次调节。").font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(3)
+                }
+                Text(model.recipe.lineExtraction.enabled ? "后台提取完成后更新画面。松开滑块可撤销这次调节；导出沿用当前线稿。" : "拖动保留随机基础，松开后可撤销这次调节。").font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(3)
             }.padding(20)
         }.background(Theme.panel)
+    }
+    private var lineControls: some View {
+        VStack(alignment:.leading,spacing:20) {
+            Text("线条提取").font(.system(size:16,weight:.semibold)).foregroundStyle(Theme.accent)
+            Text("提取固定画面的边缘，细化线条并去除零碎噪点。").font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(4)
+            Picker("预设",selection:model.binding(\.lineExtraction.preset)) {
+                ForEach(LineExtractionPreset.allCases,id:\.self) {Text($0.title).tag($0)}
+            }.pickerStyle(.segmented).accessibilityIdentifier("linePreset")
+            Text(model.recipe.lineExtraction.preset == .photo ? "照片：去噪较强，线条较淡。" : "插画：保留更多短线，线条较深。").font(.system(size:10)).foregroundStyle(Theme.secondary)
+            Divider().overlay(Theme.line)
+            VStack(spacing:18) {
+                groupHeader("提线参数") {model.edit {r in let enabled=r.lineExtraction.enabled; r.lineExtraction=LineExtractionParameters(); r.lineExtraction.enabled=enabled}}
+                lineParameter("透明度",\.lineExtraction.opacity,range:0...1)
+                lineParameter("对比度",\.lineExtraction.contrast,range:0.5...3)
+                lineParameter("亮度 / 阈值倾向",\.lineExtraction.brightness,range:-0.3...0.3)
+                lineParameter("线条粗细",\.lineExtraction.thickness,range:0...3)
+                lineParameter("细节阈值",\.lineExtraction.edgeStrength,range:0...3)
+            }
+            Text("细节阈值越高，越倾向保留明显边缘。粗细按固定画布的像素调整，局部放大时按比例变粗。").font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(4)
+            Toggle("叠加在固定原图上",isOn:model.binding(\.lineExtraction.overlayOriginal)).font(.system(size:11)).accessibilityIdentifier("lineOverlay")
+            Button("返回构成") {model.returnToComposition()}.buttonStyle(.bordered).controlSize(.small)
+            Text("返回后可继续调整原构成；提线参数会保留。再次固定线稿后，还可以继续解构或提线。").font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(4)
+        }
+    }
+    private func lineParameter(_ name: String,_ path: WritableKeyPath<GenerationRecipe,Double>,range: ClosedRange<Double>) -> some View {
+        VStack(spacing:5) {
+            HStack {Text(name); Spacer(); Text(model.recipe[keyPath:path],format:.number.precision(.fractionLength(2))).monospacedDigit().foregroundStyle(Theme.secondary)}.font(.system(size:11))
+            Slider(value:model.binding(path),in:range,onEditingChanged:model.sliderEditing).controlSize(.small).accessibilityLabel(name).accessibilityIdentifier(name)
+        }
     }
     private var deconstructionControls:some View {
         VStack(alignment:.leading,spacing:20) {
