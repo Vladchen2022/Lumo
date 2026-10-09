@@ -4,6 +4,9 @@ import LumoCore
 
 @main enum LumoEntry {
     @MainActor static func main() {
+        if let index = CommandLine.arguments.firstIndex(of:"--verify-strong-controls"), CommandLine.arguments.count > index+1 {
+            do {try DeconstructionVerification.strongControls(projectURL:URL(fileURLWithPath:CommandLine.arguments[index+1])); exit(0)} catch {fputs("Strong controls verification failed: \(error)\n",stderr); exit(1)}
+        }
         if let index = CommandLine.arguments.firstIndex(of:"--verify-deconstruction"), CommandLine.arguments.count > index+1 {
             do {try DeconstructionVerification.run(projectURL:URL(fileURLWithPath:CommandLine.arguments[index+1])); exit(0)} catch {fputs("Deconstruction verification failed: \(error)\n",stderr); exit(1)}
         }

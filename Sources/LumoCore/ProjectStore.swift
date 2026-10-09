@@ -34,8 +34,17 @@ public enum ProjectStore {
     public static func validate(_ project: LumoProject) throws {
         guard (1...2).contains(project.formatVersion), project.snapshots.count <= 100 else { throw LumoError.message("项目版本不受支持，或收藏数量超过限制。") }
         for recipe in [project.recipe]+project.snapshots.map(\.recipe) {
-            guard (1...5).contains(recipe.version), (recipe.fixedCanvas != nil ? recipe.version >= 4 : recipe.version <= 3), recipe.fixedCanvas != nil || recipe.method != .deconstruction || recipe.version == (recipe.deconstruction.expandedTransforms ? 3 : 2) else { throw LumoError.message("这个项目使用了更新的生成器版本。") }
-            guard recipe.lineExtraction.isValid, !recipe.lineExtraction.enabled || recipe.fixedCanvas != nil, recipe.lineExtraction == LineExtractionParameters() || recipe.version == 5 else {throw LumoError.message("项目包含无效的线条提取参数。") }
+            let strong = recipe.method == .deconstruction && recipe.deconstruction.strongTransforms
+            let supported: Bool
+            if strong {
+                supported = recipe.version == 6 && recipe.deconstruction.expandedTransforms
+            } else {
+                supported = (1...5).contains(recipe.version)
+                    && (recipe.fixedCanvas != nil ? recipe.version >= 4 : recipe.version <= 3)
+                    && (recipe.fixedCanvas != nil || recipe.method != .deconstruction || recipe.version == (recipe.deconstruction.expandedTransforms ? 3 : 2))
+            }
+            guard supported else { throw LumoError.message("这个项目使用了更新的生成器版本。") }
+            guard recipe.lineExtraction.isValid, !recipe.lineExtraction.enabled || recipe.fixedCanvas != nil, recipe.lineExtraction == LineExtractionParameters() || recipe.version >= 5 else {throw LumoError.message("项目包含无效的线条提取参数。") }
             let normalized = [recipe.color.saturation,recipe.color.brightness,recipe.color.contrast,recipe.color.dominance,recipe.shape.density,recipe.shape.scale,recipe.shape.variation,recipe.shape.curvature,recipe.shape.stretch,recipe.shape.clustering,recipe.shape.coherence,recipe.shape.organic,recipe.shape.erosion,recipe.appearance.softness,recipe.appearance.lineWidth,recipe.appearance.lineStrength,recipe.deconstruction.granularity,recipe.deconstruction.breakup,recipe.deconstruction.rotation,recipe.deconstruction.sizeVariation,recipe.deconstruction.overlap,recipe.deconstruction.grouping]
             guard (normalized+[recipe.deconstruction.softness]).allSatisfy({ $0.isFinite && (0...1).contains($0) }), recipe.color.hue.isFinite, (-180...180).contains(recipe.color.hue), recipe.shape.direction.isFinite, (-180...180).contains(recipe.shape.direction), recipe.canvasAspect.isFinite, (0.25...4).contains(recipe.canvasAspect) else { throw LumoError.message("项目包含无效的调节参数。") }
             guard recipe.colorLayers.count == 3 else {throw LumoError.message("项目必须包含三个颜色层。")}

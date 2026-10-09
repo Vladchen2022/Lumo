@@ -7,6 +7,7 @@ public enum GenerationMethod: String, Codable, CaseIterable, Sendable {
 }
 public struct DeconstructionParameters: Codable, Equatable, Sendable {
     public var expandedTransforms = true
+    public var strongTransforms = true
     public var granularity = 0.45
     public var breakup = 0.50
     public var rotation = 0.30
@@ -16,11 +17,13 @@ public struct DeconstructionParameters: Codable, Equatable, Sendable {
     public var softness = 0.10
     public init() {}
     public var fragmentCount: Int {8 + Int((granularity * 72).rounded())}
-    private enum CodingKeys: String, CodingKey {case expandedTransforms, granularity, breakup, rotation, sizeVariation, overlap, grouping, softness}
+    private enum CodingKeys: String, CodingKey {case expandedTransforms, strongTransforms, granularity, breakup, rotation, sizeVariation, overlap, grouping, softness}
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy:CodingKeys.self)
         // Missing in 0.3 projects: retain their original construction until explicitly adjusted.
         expandedTransforms = try c.decodeIfPresent(Bool.self,forKey:.expandedTransforms) ?? false
+        // Preserve existing compositions until a revised control is deliberately used.
+        strongTransforms = try c.decodeIfPresent(Bool.self,forKey:.strongTransforms) ?? false
         granularity = try c.decodeIfPresent(Double.self,forKey:.granularity) ?? 0.45
         breakup = try c.decodeIfPresent(Double.self,forKey:.breakup) ?? 0.5
         rotation = try c.decodeIfPresent(Double.self,forKey:.rotation) ?? 0.3
@@ -203,6 +206,12 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
     public var shapeLocked = false
     public var canvasAspect = 1.0
     public init() {}
+    public var currentVersion: Int {
+        if method == .deconstruction && deconstruction.strongTransforms {return 6}
+        if lineExtraction != LineExtractionParameters() {return 5}
+        if fixedCanvas != nil {return 4}
+        return method == .deconstruction ? (deconstruction.expandedTransforms ? 3 : 2) : 1
+    }
     private static var defaultLayers: [ColorLayer] {
         (1...3).map {index in var layer = ColorLayer(); layer.id = UUID(uuidString: "00000000-0000-0000-0000-00000000000\(index)")!; if index == 1 {layer.opacity = 1; layer.blend = .normal}; return layer}
     }

@@ -39,7 +39,6 @@ public enum EffectCommitter {
         inputs.colorSource=reference
         next.colorSource=reference; next.colorLayers=inputs.colorLayers
         next.shapeSource=reference
-        next.version=4
         next.lineExtraction=LineExtractionParameters()
         if recipe.lineExtraction.enabled {next.method = .deconstruction}
         if next.method == .deconstruction {
@@ -49,6 +48,7 @@ public enum EffectCommitter {
         } else {
             next.color=ColorParameters(); next.shape = .continuation
         }
+        next.version=next.currentVersion
         return next
     }
 }

@@ -13,7 +13,7 @@ final class LineExtractionTests: XCTestCase {
         return try ReferencePixels.png(c.makeImage()!)
     }
     private func fixed(_ renderer: MetalRenderer) throws -> GenerationRecipe {
-        var recipe=GenerationRecipe(); recipe.method = .deconstruction; recipe.version=3; recipe.canvasAspect=4.0/3
+        var recipe=GenerationRecipe(); recipe.method = .deconstruction; recipe.version=3; recipe.deconstruction.strongTransforms=false; recipe.canvasAspect=4.0/3
         recipe.colorSource=try ReferenceAnalyzer.analyze(data:pattern(),name:"pattern",forColor:true)
         recipe.deconstruction.breakup=0
         return try EffectCommitter.prepare(recipe:recipe,scene:SceneGenerator.generate(recipe),renderer:renderer,longEdge:256)

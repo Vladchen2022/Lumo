@@ -50,6 +50,9 @@ public enum DeconstructionGenerator {
         // rotation and size their full range once breakup reaches 20%.
         let progress = min(1,p.breakup/0.2)
         let activation = progress*progress*(3-2*progress)
+        // A responsive position curve makes low breakup values useful. The final
+        // target remains inside the canvas, rather than throwing pieces off-screen.
+        let scatter = p.strongTransforms ? sqrt(p.breakup) : p.breakup
         var fragments: [ImageFragment] = []
         for index in layers.indices {
             guard let source = layers[index].source else {continue}
@@ -75,13 +78,26 @@ public enum DeconstructionGenerator {
                 let pivot = origin+SIMD2((Double(gx)+0.5)/3*width,(Double(gy)+0.5)/3*height)
                 let relative = originalCenter-pivot
                 let rotated = SIMD2(relative.x*cos(coherentAngle)-relative.y*sin(coherentAngle),relative.x*sin(coherentAngle)+relative.y*cos(coherentAngle))
-                let coherentCenter = pivot+rotated+groupOffset*p.breakup
-                let independentCenter = originalCenter+(target-originalCenter)*p.breakup
+                let groupTarget = SIMD2(recipe.canvasAspect*0.5,0.5)+groupOffset*0.8
+                let translation = p.strongTransforms ? groupTarget-pivot : groupOffset
+                let coherentCenter = pivot+rotated+translation*scatter
+                let independentCenter = originalCenter+(target-originalCenter)*scatter
                 let center = independentCenter*(1-p.grouping)+coherentCenter*p.grouping
                 let angle = independentAngle*(1-p.grouping)+coherentAngle*p.grouping
                 let sizeSample = random.unit()
                 let size: Double
-                if p.expandedTransforms {
+                if p.strongTransforms {
+                    // Separate individual size rhythm from the common gap scale.
+                    // Log interpolation keeps the neutral midpoint at exactly 1×.
+                    // A broad distribution makes tiny pieces and dominant pieces
+                    // occur regularly, including with only a few dozen fragments.
+                    let signed = sizeSample*2-1
+                    let spread = (signed<0 ? -1.0 : 1.0)*pow(abs(signed),0.65)
+                    let variation = spread*(spread<0 ? log(20) : log(5))*p.sizeVariation
+                    let gap = (p.overlap-0.5)*2
+                    let overlap = gap*(gap<0 ? log(1/0.12) : log(4))
+                    size = exp((variation+overlap)*activation)
+                } else if p.expandedTransforms {
                     // Logarithmic scaling creates a wide ratio without zero or negative sizes.
                     // At maximum variation: 0.15× to 3×, before the shared overlap multiplier.
                     let signed = sizeSample*2-1

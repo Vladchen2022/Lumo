@@ -279,7 +279,7 @@ final class LumoCoreTests:XCTestCase {
         try fixture(url,width:240,height:160) {c in c.setFillColor(CGColor(srgbRed:0.2,green:0.5,blue:0.8,alpha:1)); c.fill(CGRect(x:0,y:0,width:240,height:160))}
         var r = GenerationRecipe(); r.colorSource = try ReferenceAnalyzer.analyze(url:url,forColor:true)
         let abstract = SceneGenerator.generate(r)
-        r.method = .deconstruction; r.version = 3
+        r.method = .deconstruction; r.version = 3; r.deconstruction.strongTransforms=false
         let original = SceneGenerator.generate(r)
         XCTAssertEqual(original,SceneGenerator.generate(r)); XCTAssertTrue(original.shapes.isEmpty)
         for amount in [0.0,0.4,1.0] {
@@ -293,7 +293,7 @@ final class LumoCoreTests:XCTestCase {
             }
             XCTAssertEqual(area,1,accuracy:0.00001)
         }
-        r.deconstruction = DeconstructionParameters(); r.deconstruction.breakup = 0.5001
+        r.deconstruction = DeconstructionParameters(); r.deconstruction.strongTransforms=false; r.deconstruction.breakup = 0.5001
         let next = SceneGenerator.generate(r)
         XCTAssertEqual(original.fragments.map(\.textureCoordinates),next.fragments.map(\.textureCoordinates))
         for (a,b) in zip(original.fragments,next.fragments) {for (p,q) in zip(a.contour,b.contour) {XCTAssertLessThan(hypot(p.x-q.x,p.y-q.y),0.001)}}
@@ -324,7 +324,7 @@ final class LumoCoreTests:XCTestCase {
             c.setFillColor(CGColor(srgbRed:1,green:0,blue:1,alpha:1)); c.fill(CGRect(x:201,y:51,width:1,height:1))
         }
         var r = GenerationRecipe(); r.colorSource = try ReferenceAnalyzer.analyze(url:url,forColor:true)
-        r.method = .deconstruction; r.version = 3; r.canvasAspect = 4.0/3
+        r.method = .deconstruction; r.version = 3; r.deconstruction.strongTransforms=false; r.canvasAspect = 4.0/3
         r.color.hue = 135; r.setLayer(0) {$0.paletteOverrides[0] = .init(0,0,0)}
         r.deconstruction.breakup = 0; r.deconstruction.softness = 1
         let renderer = try MetalRenderer()
@@ -342,7 +342,7 @@ final class LumoCoreTests:XCTestCase {
     }
     func testDeconstructionThreeLayersOfflinePersistenceAndCrop() throws {
         let root = try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
-        var project = LumoProject(); project.recipe.method = .deconstruction; project.recipe.version = 3
+        var project = LumoProject(); project.recipe.method = .deconstruction; project.recipe.version = 3; project.recipe.deconstruction.strongTransforms=false
         project.recipe.deconstruction.softness = 1; project.recipe.deconstruction.granularity = 1
         for layer in 0..<3 {
             let url = root.appendingPathComponent("layer\(layer).png")
@@ -375,7 +375,7 @@ final class LumoCoreTests:XCTestCase {
         let root = try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
         let url = root.appendingPathComponent("alpha.png")
         try fixture(url,width:64,height:64) {c in c.setFillColor(CGColor(srgbRed:0.8,green:0.2,blue:0.4,alpha:0.5)); c.fill(CGRect(x:0,y:0,width:32,height:64))}
-        var r = GenerationRecipe(); r.method = .deconstruction; r.version = 3; r.deconstruction.breakup = 0
+        var r = GenerationRecipe(); r.method = .deconstruction; r.version = 3; r.deconstruction.strongTransforms=false; r.deconstruction.breakup = 0
         r.colorSource = try ReferenceAnalyzer.analyze(url:url,forColor:true)
         let scene = SceneGenerator.generate(r), renderer = try MetalRenderer()
         let image = try renderer.image(scene:scene,width:64,height:64), bytes = Array(image.dataProvider!.data! as Data)
@@ -392,7 +392,7 @@ final class LumoCoreTests:XCTestCase {
         let root=try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
         let url=root.appendingPathComponent("range.png")
         try fixture(url,width:200,height:200) {c in c.setFillColor(CGColor(srgbRed:0.8,green:0.3,blue:0.1,alpha:1)); c.fill(CGRect(x:0,y:0,width:200,height:200))}
-        var r=GenerationRecipe(); r.method = .deconstruction; r.version=3
+        var r=GenerationRecipe(); r.method = .deconstruction; r.version=3; r.deconstruction.strongTransforms=false
         r.colorSource=try ReferenceAnalyzer.analyze(url:url,forColor:true)
         r.deconstruction.granularity=1; r.deconstruction.breakup=0.39
         r.deconstruction.grouping=0; r.deconstruction.rotation=0; r.deconstruction.sizeVariation=0; r.deconstruction.overlap=1
@@ -440,7 +440,7 @@ final class LumoCoreTests:XCTestCase {
         XCTAssertEqual(SceneGenerator.generate(old),SceneGenerator.generate(restored),"0.3 recipes must keep their existing geometry")
         var project=LumoProject(); project.recipe=restored
         XCTAssertNoThrow(try ProjectStore.validate(project))
-        project.recipe=r; project.recipe.deconstruction.expandedTransforms=true; project.recipe.version=3
+        project.recipe=r; project.recipe.deconstruction.expandedTransforms=true; project.recipe.version=3; project.recipe.deconstruction.strongTransforms=false
         let saved=root.appendingPathComponent("expanded.lumo"); try ProjectStore.save(project,to:saved)
         XCTAssertEqual(try ProjectStore.open(saved).recipe,project.recipe)
     }
@@ -493,7 +493,7 @@ final class LumoCoreTests:XCTestCase {
     }
     func testDeconstructionFixBakesAllLayersAndCutsTheNewPicture() throws {
         let root=try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
-        var recipe=GenerationRecipe(); recipe.method = .deconstruction; recipe.version=3
+        var recipe=GenerationRecipe(); recipe.method = .deconstruction; recipe.version=3; recipe.deconstruction.strongTransforms=false
         recipe.deconstruction.breakup=0.65; recipe.deconstruction.sizeVariation=0.8
         for layer in 0..<3 {
             let url=root.appendingPathComponent("source\(layer).png")
@@ -577,7 +577,7 @@ final class LumoCoreTests:XCTestCase {
             var project=LumoProject(); project.recipe=invalid
             XCTAssertThrowsError(try ProjectStore.validate(project))
         }
-        var plain=GenerationRecipe(); plain.method = .deconstruction; plain.version=3; plain.deconstruction.breakup=0
+        var plain=GenerationRecipe(); plain.method = .deconstruction; plain.version=3; plain.deconstruction.strongTransforms=false; plain.deconstruction.breakup=0
         let root=try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
         let url=root.appendingPathComponent("plain.png")
         try fixture(url,width:64,height:64) {c in c.setFillColor(CGColor(srgbRed:0.5,green:0.5,blue:0.5,alpha:1)); c.fill(CGRect(x:0,y:0,width:64,height:64))}
@@ -589,7 +589,7 @@ final class LumoCoreTests:XCTestCase {
         fixed=try EffectCommitter.prepare(recipe:fixed,scene:generated,renderer:renderer,longEdge:128)
         fixed.color.dominance=0
         _=try renderer.image(scene:SceneGenerator.generate(fixed),width:128,height:128)
-        var empty=GenerationRecipe(); empty.method = .deconstruction; empty.version=3
+        var empty=GenerationRecipe(); empty.method = .deconstruction; empty.version=3; empty.deconstruction.strongTransforms=false
         XCTAssertThrowsError(try EffectCommitter.prepare(recipe:empty,scene:SceneGenerator.generate(empty),renderer:renderer,longEdge:128))
     }
     private func temporaryDirectory() throws -> URL {let url=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); try FileManager.default.createDirectory(at:url,withIntermediateDirectories:true); return url}

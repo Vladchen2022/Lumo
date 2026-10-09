@@ -48,7 +48,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     func edit(_ action: (inout GenerationRecipe) -> Void) {
         guard !isFixing else {return}
         let before = recipe; var next = recipe; action(&next)
-        next.version = next.lineExtraction != LineExtractionParameters() ? 5 : (next.fixedCanvas != nil ? 4 : (next.method == .deconstruction ? (next.deconstruction.expandedTransforms ? 3 : 2) : 1))
+        next.version = next.currentVersion
         guard next != before else { return }
         recipe = next; history.record(before:before,after:next); refreshScene()
         if before.canvasAspect != next.canvasAspect { resetExportAspect() }
@@ -100,6 +100,11 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     func expandedBinding(_ keyPath: WritableKeyPath<GenerationRecipe,Double>) -> Binding<Double> {
         Binding(get:{self.recipe[keyPath:keyPath]},set:{value in
             self.edit {$0[keyPath:keyPath]=value; $0.deconstruction.expandedTransforms=true}
+        })
+    }
+    func strongBinding(_ keyPath: WritableKeyPath<GenerationRecipe,Double>) -> Binding<Double> {
+        Binding(get:{self.recipe[keyPath:keyPath]},set:{value in
+            self.edit {$0[keyPath:keyPath]=value; $0.deconstruction.expandedTransforms=true; $0.deconstruction.strongTransforms=true}
         })
     }
     func undo() {guard !isFixing else {return}; if let next = history.undo(recipe) { recipe = next; refreshScene(); resetExportAspect() } }
