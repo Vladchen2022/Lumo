@@ -12,7 +12,7 @@ public struct SeededRandom: Sendable {
     }
     public mutating func unit() -> Double { Double(next() >> 11) / 9007199254740992.0 }
 }
-public struct SceneShape: Equatable, Sendable {
+public struct SceneShape: Codable, Equatable, Sendable {
     public var id: Int
     public var layer: Int = 0
     public var center: SIMD2<Float>
@@ -21,7 +21,7 @@ public struct SceneShape: Equatable, Sendable {
     public var opacity: Float
     public var gradient: Float
 }
-public struct AbstractScene: Equatable, Sendable {
+public struct AbstractScene: Codable, Equatable, Sendable {
     public var aspect: Double
     public var background: RGBColor
     public var shapes: [SceneShape]
@@ -70,6 +70,7 @@ public enum SceneGenerator {
     }
     public static func generate(_ recipe: GenerationRecipe) -> AbstractScene {
         if recipe.method == .deconstruction {return DeconstructionGenerator.generate(recipe)}
+        if let fixed=recipe.fixedCanvas, fixed.geometry != nil {return FixedSceneGenerator.generate(recipe,fixed:fixed)}
         let palette = palette(for: recipe)
         let p = recipe.shape
         var shapes: [SceneShape] = []
@@ -131,7 +132,7 @@ public enum SceneGenerator {
         }
         return AbstractScene(aspect: recipe.canvasAspect, background: recipe.mode == .shape ? .white : palette[0].color, shapes: shapes, mode: recipe.mode, shapeDisplay: recipe.shapeDisplay, appearance: recipe.appearance, layers: (0..<3).map {recipe.layer($0)})
     }
-    private static func adjust(_ c: RGBColor, parameters p: ColorParameters) -> RGBColor {
+    static func adjust(_ c: RGBColor, parameters p: ColorParameters) -> RGBColor {
         let maxC = max(c.r, c.g, c.b), minC = min(c.r, c.g, c.b), delta = maxC - minC
         var h = 0.0
         if delta > 0 {

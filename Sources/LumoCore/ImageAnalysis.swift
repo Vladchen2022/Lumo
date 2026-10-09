@@ -7,7 +7,15 @@ import simd
 public enum ReferenceAnalyzer {
     private struct Sample { var lab: SIMD3<Double>; var alpha: Double }
     public static func analyze(url: URL, forColor: Bool) throws -> SourceReference {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary), let rawType = CGImageSourceGetType(source) else { throw LumoError.message("无法读取这张图片。请选择 PNG、JPEG、HEIC 或 TIFF。") }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { throw LumoError.message("无法读取这张图片。请选择 PNG、JPEG、HEIC 或 TIFF。") }
+        return try analyze(source:source,name:url.lastPathComponent,forColor:forColor)
+    }
+    public static func analyze(data: Data, name: String, forColor: Bool) throws -> SourceReference {
+        guard let source=CGImageSourceCreateWithData(data as CFData,[kCGImageSourceShouldCache:false] as CFDictionary) else {throw LumoError.message("无法读取固定画布。")}
+        return try analyze(source:source,name:name,forColor:forColor)
+    }
+    private static func analyze(source: CGImageSource, name: String, forColor: Bool) throws -> SourceReference {
+        guard let rawType=CGImageSourceGetType(source) else {throw LumoError.message("图片格式无法识别。")}
         let type = rawType as String
         guard [UTType.png.identifier, UTType.jpeg.identifier, UTType.heic.identifier, "public.heif", UTType.tiff.identifier].contains(type) else { throw LumoError.message("目前支持 PNG、JPEG、HEIC 和 TIFF 参考图。") }
         if let properties=CGImageSourceCopyPropertiesAtIndex(source,0,nil) as? [CFString:Any],let width=properties[kCGImagePropertyPixelWidth] as? Int,let height=properties[kCGImagePropertyPixelHeight] as? Int {
@@ -37,14 +45,14 @@ public enum ReferenceAnalyzer {
         CGImageDestinationAddImage(destination,image,nil)
         guard CGImageDestinationFinalize(destination) else { throw LumoError.message("无法保存参考缩略图。") }
         if forColor {
-            var reference = SourceReference(name:url.lastPathComponent,thumbnail:thumbnail as Data,palette:cluster(samples))
+            var reference = SourceReference(name:name,thumbnail:thumbnail as Data,palette:cluster(samples))
             var samplingOptions = options; samplingOptions[kCGImageSourceThumbnailMaxPixelSize] = 2048
             if let preview = CGImageSourceCreateThumbnailAtIndex(source,0,samplingOptions as CFDictionary), let data = try? ReferencePixels.png(preview), data.count <= 16*1024*1024 {reference.samplingImage = data}
             var renderOptions = options; renderOptions[kCGImageSourceThumbnailMaxPixelSize] = 4096
             if let full = CGImageSourceCreateThumbnailAtIndex(source,0,renderOptions as CFDictionary), let data = try? ReferencePixels.png(full), data.count <= 32*1024*1024 {reference.renderImage = data}
             return reference
         }
-        return SourceReference(name:url.lastPathComponent,thumbnail:thumbnail as Data,features:try features(gray,width:width,height:height))
+        return SourceReference(name:name,thumbnail:thumbnail as Data,features:try features(gray,width:width,height:height))
     }
     private static func cluster(_ samples: [Sample]) -> [PaletteEntry] {
         let stride = max(1,samples.count/8192)

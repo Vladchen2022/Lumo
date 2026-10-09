@@ -20,6 +20,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     @Published var showColorPicker = false
     @Published var importingShape = false
     @Published var isExporting = false
+    @Published private(set) var isFixing = false
     @Published private(set) var projectURL: URL?
     let renderer: MetalRenderer?
     private var history = RecipeHistory()
@@ -27,6 +28,8 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
     private var colorRequest = UUID(), shapeRequest = UUID()
     private var layerRequests = [UUID(),UUID(),UUID()]
     private var originalURLs: [UUID:URL] = [:]
+    private var fixRequest=UUID()
+    var canFix: Bool {renderer != nil && !isFixing && !isExporting && !importingColor && !importingShape && (recipe.method != .deconstruction || !scene.fragments.isEmpty)}
     var canUndo: Bool { history.canUndo }
     var canRedo: Bool { history.canRedo }
     var isDirty: Bool { project != savedProject }
@@ -39,8 +42,9 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
         catch { renderer = nil; alert = StudioAlert(message:error.localizedDescription) }
     }
     func edit(_ action: (inout GenerationRecipe) -> Void) {
+        guard !isFixing else {return}
         let before = recipe; var next = recipe; action(&next)
-        next.version = next.method == .deconstruction ? (next.deconstruction.expandedTransforms ? 3 : 2) : 1
+        next.version = next.fixedCanvas != nil ? 4 : (next.method == .deconstruction ? (next.deconstruction.expandedTransforms ? 3 : 2) : 1)
         guard next != before else { return }
         recipe = next; history.record(before:before,after:next); scene = SceneGenerator.generate(next)
         if before.canvasAspect != next.canvasAspect { resetExportAspect() }
@@ -56,11 +60,48 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
             self.edit {$0[keyPath:keyPath]=value; $0.deconstruction.expandedTransforms=true}
         })
     }
-    func undo() { if let next = history.undo(recipe) { recipe = next; scene = SceneGenerator.generate(next); resetExportAspect() } }
-    func redo() { if let next = history.redo(recipe) { recipe = next; scene = SceneGenerator.generate(next); resetExportAspect() } }
+    func undo() {guard !isFixing else {return}; if let next = history.undo(recipe) { recipe = next; scene = SceneGenerator.generate(next); resetExportAspect() } }
+    func redo() {guard !isFixing else {return}; if let next = history.redo(recipe) { recipe = next; scene = SceneGenerator.generate(next); resetExportAspect() } }
+    func fixCurrentEffect() {
+        guard canFix,let renderer else {return}
+        guard snapshots.count<100 else {alert=StudioAlert(message:"阶段与收藏已满 100 个，请删除不需要的记录后再固定。"); return}
+        let before=recipe, captured=scene, capturedProject=project, request=UUID()
+        fixRequest=request; isFixing=true; status="正在固定整张画布…"
+        Task {
+            do {
+                let candidate=try await Task.detached(priority:.userInitiated) {
+                    var result=capturedProject
+                    result.recipe=try EffectCommitter.prepare(recipe:before,scene:captured,renderer:renderer)
+                    result.snapshots.insert(SavedSnapshot(name:"固定前 · 第\(result.recipe.fixedCanvas!.round)轮",recipe:before),at:0)
+                    result.export.crop=nil; result.export.matchAspect(result.recipe.canvasAspect)
+                    _=try ProjectStore.documentData(result)
+                    return result
+                }.value
+                let next=candidate.recipe
+                guard request==fixRequest,recipe==before else {return}
+                isFixing=false
+                let round=next.fixedCanvas!.round
+                snapshots=candidate.snapshots
+                edit {$0=next}; resetExportAspect(); selectedColorLayer=0
+                status=next.method == .deconstruction ? "已固定第 \(round) 轮；拖动打散开始再次解构，⌘Z 可撤销固定" : "已固定第 \(round) 轮；保留布局继续变形，参数 50 为本轮起点"
+            } catch {if request==fixRequest {alert=StudioAlert(message:error.localizedDescription); status="固定失败，当前画面未改变"}}
+            if request==fixRequest {isFixing=false}
+        }
+    }
     func randomize(color: Bool = true, shape: Bool = true) {
         edit { r in if color {r.randomizeColor()}; if shape {r.randomizeShape()} }
         status = recipe.method == .deconstruction ? "已重新分块或更换碎片叠放；锁定的来源保持不变" : "已生成新的构成；锁定的来源保持不变"
+    }
+    func restoreIterationStart() {
+        guard let fixed=recipe.fixedCanvas else {return}
+        edit {r in
+            if r.method == .abstract {
+                r.color=ColorParameters(); r.shape = fixed.geometry != nil ? .continuation : (fixed.reference.features.map(ShapeParameters.init(features:)) ?? ShapeParameters())
+                r.colorSeed=fixed.colorSeed; r.shapeSeed=fixed.shapeSeed
+                if let geometry=fixed.geometry {r.mode=geometry.mode; r.shapeDisplay=geometry.shapeDisplay; r.appearance=geometry.appearance}
+            } else {r.deconstruction.breakup=0}
+        }
+        status="已恢复本轮固定画面；阶段输入保持不变"
     }
     func apply(_ preset: CompositionPreset) { edit {$0.apply(preset)}; status = "已应用「\(preset.title)」，可以继续调节" }
     func layerBinding<T>(_ index: Int, _ keyPath: WritableKeyPath<ColorLayer,T>) -> Binding<T> {
@@ -87,6 +128,7 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
                 }.value
                 guard request == (color ? layerRequests[layer] : shapeRequest) else {return}
                 edit {r in
+                    r.fixedCanvas=nil
                     if color {r.setLayer(layer) {$0.source = reference; $0.enabled = true; $0.paletteOverrides = [:]; $0.weightOverrides = [:]}}
                     else {r.shapeSource = reference; if let f = reference.features {r.shape = ShapeParameters(features:f)}}
                 }
@@ -110,15 +152,17 @@ struct StudioAlert: Identifiable { let id = UUID(); let message: String }
         status = "已替换颜色层 \(layer+1) 的色标 \(slot+1)；可调占比强化点缀色"
     }
     private func cancelImports() {
+        fixRequest=UUID(); isFixing=false
         colorRequest = UUID(); shapeRequest = UUID(); layerRequests = [UUID(),UUID(),UUID()]; importingLayers = []; importingColor = false; importingShape = false
     }
     func addSnapshot() {
+        guard !isFixing else {return}
         guard snapshots.count < 100 else {alert=StudioAlert(message:"最多保存 100 个收藏，请先删除不需要的构成。"); return}
         snapshots.insert(SavedSnapshot(name:"构成 \(String(format:"%02d",snapshots.count+1))",recipe:recipe),at:0)
         status = "已收藏当前构成；保存项目后可随时恢复"
     }
     func restore(_ snapshot: SavedSnapshot) {edit {$0=snapshot.recipe}; status="已恢复「\(snapshot.name)」"}
-    func deleteSnapshot(_ id: UUID) {snapshots.removeAll {$0.id==id}}
+    func deleteSnapshot(_ id: UUID) {guard !isFixing else {return}; snapshots.removeAll {$0.id==id}}
     func resetExportAspect() {
         exportSettings.crop=nil
         isCropping=false

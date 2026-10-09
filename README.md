@@ -1,4 +1,4 @@
-# Lumo 0.3.1 · 图像解构与自由框选
+# Lumo 0.4 · 固定效果与多轮处理
 
 原生 macOS 构成工具。抽象生成从颜色及结构统计生成色块、轮廓和单色线条；新增图像解构直接保留参考像素、纹理与局部形状，分块后重新拼接。所有处理在本机完成。
 
@@ -28,7 +28,17 @@ open dist/Lumo.app
 
 取色优先使用当前导入的原图像素；项目重开或原文件不可用时，使用项目内最长 2048 像素的取色预览。0.1 项目只含原来的缩略图，若需要更细的取色精度，重新导入该参考。所有取样统一转换到 sRGB，透明位置不作为色标。
 
-快捷键：⌘N 新建、⌘O 打开、⌘S 保存、⇧⌘S 另存、⌘Z 撤销、⇧⌘Z 重做、⌘R 随机、⌘D 收藏、⇧⌘E 导出。
+快捷键：⌘N 新建、⌘O 打开、⌘S 保存、⇧⌘S 另存、⌘Z 撤销、⇧⌘Z 重做、⌘R 随机、⌘D 收藏、⇧⌘F 固定当前效果、⇧⌘E 导出。
+
+## 固定当前效果
+
+点击顶部“固定当前效果”，确认这一轮结果后继续处理。固定针对整张画布，不受选区和导出尺寸影响。完成后左侧显示本轮输入，下方“阶段与收藏”自动保留固定前的参数和来源；⌘Z 可撤销整次固定，保存项目后也能从阶段记录恢复。固定期间暂停编辑，失败不替换画面。
+
+- **图像解构**：将所有可见图层及混合效果合成一张长边 4096 像素的 sRGB PNG，作为下一轮的整张输入。打散归零，画面保持原来的效果；再拖动打散，就会切分、重新拼接这张合成图。再次固定可继续第三轮处理。
+- **抽象生成**：保留当前几何、布局、层间混合与色彩，不重新随机构图。色彩与结构控制回到本轮中性值 50，色相和方向回到 0；表现参数保留原值。之后的变化叠加在已经固定的形状上，再次固定建立下一个起点。
+- “恢复本轮起点”回到本次固定时的画面，可以重新尝试；导入新图片或应用起始预设会结束当前阶段，旧结果仍可从阶段记录恢复。
+
+解构的多轮处理会反复采样像素，细节可能逐轮损失；固定不增加新的源图细节。抽象生成保留可编辑几何，单阶段最多 768 个形状。阶段与收藏合计最多 100 个，项目上限 128 MB；固定前先校验完整项目能否保存，超限时保留当前状态并提示。
 
 ## 图像解构
 
@@ -48,7 +58,7 @@ open dist/Lumo.app
 
 ## Git 与回退
 
-仓库在本项目目录，当前分支为 `improvement/deconstruction-range-and-free-crop`。0.3 原版留在 `experiment/image-deconstruction`，提交 `912bc15`、标签 `lumo-0.3-deconstruction-trial`。改动前的提交是 `0512943`，标签为 `lumo-0.2-before-deconstruction`，`main` 保留该版本。没有创建远程仓库。
+仓库在本项目目录，当前分支为 `improvement/fixed-effect-stages`。改动前的 0.3.1 保留在 `improvement/deconstruction-range-and-free-crop`，提交 `977f542`、标签 `lumo-0.3.1-wide-controls-free-crop`。0.3 原版留在 `experiment/image-deconstruction`，提交 `912bc15`、标签 `lumo-0.3-deconstruction-trial`。抽象生成基线是 `0512943`，标签 `lumo-0.2-before-deconstruction`，`main` 保留该版本。没有创建远程仓库。
 
 退出 Lumo 后，在工作区没有未提交修改时可以回到 0.2 并重建：
 
@@ -60,11 +70,13 @@ bash Scripts/build-app.sh
 重新试用新模式：
 
 ```sh
-git switch improvement/deconstruction-range-and-free-crop
+git switch improvement/fixed-effect-stages
 bash Scripts/build-app.sh
 ```
 
-本次改动前的 0.3 应用备份为 `artifacts/upgrade/Lumo-0.3-before-wide-controls.zip`，升级前用户当前画面另存 `artifacts/deconstruction/扩大范围与自由框选前当前画面.lumo`。新版试用另存 `artifacts/deconstruction/扩展范围与自由框选试用.lumo`。回到 0.3 时，退出应用后切换 `experiment/image-deconstruction` 并运行构建脚本，打开升级前项目；0.3 无法打开启用扩展变换的版本 3 配方。
+0.4 改动前的应用备份为 `artifacts/upgrade/Lumo-0.3.1-before-stages.zip`，用户画面另存 `artifacts/deconstruction/固定效果功能前当前画面.lumo`。两轮处理的试用项目在 `artifacts/stages/用户多轮解构试用.lumo` 和 `artifacts/stages/抽象布局连续变形试用.lumo`。回到 0.3.1 时，退出应用后切换 `improvement/deconstruction-range-and-free-crop` 并重新构建，打开固定前项目；旧版无法打开包含版本 4 固定阶段的项目。
+
+0.3.1 改动前的 0.3 应用备份为 `artifacts/upgrade/Lumo-0.3-before-wide-controls.zip`，升级前用户当前画面另存 `artifacts/deconstruction/扩大范围与自由框选前当前画面.lumo`。试用另存 `artifacts/deconstruction/扩展范围与自由框选试用.lumo`。回到 0.3 时，退出应用后切换 `experiment/image-deconstruction` 并运行构建脚本，打开升级前项目；0.3 无法打开启用扩展变换的版本 3 配方。
 
 已备份的旧应用为 `artifacts/upgrade/Lumo-0.2-before-deconstruction.zip`，完整性检查通过。升级时的实际用户画面另存为 `artifacts/upgrade/解构试验前当前画面.lumo`；新模式试用另存为 `artifacts/deconstruction/用户画面解构试用.lumo`。旧版无法打开包含版本 2 解构配方的项目，回退时请继续使用升级前项目。
 
@@ -74,7 +86,7 @@ bash Scripts/build-app.sh
 - `Lumo`：SwiftUI 界面、按需绘制的 MTKView、滑块撤销事务、收藏和文件面板。
 - 抽象生成仅消费代表色与占比、结构方向、曲直、区域尺度和疏密统计。图像解构另设 Voronoi 分块场景和 Metal 纹理管线，直接读取项目内参考像素。
 - 画布和导出共用 Metal 管线，普通透明合成在 sRGB 线性空间进行；叠加、柔光等混合公式在 sRGB 编码值上计算，再转换回线性工作空间。程序化混合使用 Apple GPU 的 [Metal 可编程混合](https://developer.apple.com/documentation/Metal/rendering-a-scene-with-deferred-lighting-in-objective-c)。
-- 项目格式为版本 2，支持读取 0.1、0.2 项目并保持来源、种子及原有参数。缺少生成方式时默认抽象生成；旧解构配方使用版本 2，需要 Lumo 0.3；扩展变换配方使用版本 3，需要 Lumo 0.3.1。未知版本或无效数据不会替换当前画面。
+- 项目格式为版本 2，支持读取旧项目并保持来源、种子及原有参数。缺少生成方式时默认抽象生成；旧解构配方使用版本 2，需要 Lumo 0.3；扩展变换配方使用版本 3，需要 Lumo 0.3.1；固定阶段使用版本 4，需要 Lumo 0.4。阶段不递归嵌套配方，相同图片数据继续去重。未知版本或无效数据不会替换当前画面。
 
 ## 验证
 

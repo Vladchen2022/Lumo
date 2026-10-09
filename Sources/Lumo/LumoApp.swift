@@ -57,6 +57,8 @@ struct LumoApp:App {
                     Button("重做") {model.redo()}.keyboardShortcut("z",modifiers:[.command,.shift]).disabled(!model.canRedo)
                 }
                 CommandMenu("构成") {
+                    Button("固定当前效果") {model.fixCurrentEffect()}.keyboardShortcut("f",modifiers:[.command,.shift]).disabled(!model.canFix)
+                    Divider()
                     Button("退出框选") {model.finishCrop()}.disabled(!model.isCropping)
                     Divider()
                     Button("全部随机") {model.randomize()}.keyboardShortcut("r").disabled(model.recipe.colorLocked && model.recipe.shapeLocked)

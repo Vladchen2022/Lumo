@@ -185,6 +185,7 @@ public enum CompositionPreset: String, CaseIterable, Sendable {
 }
 public struct GenerationRecipe: Codable, Equatable, Sendable {
     public var version = 1
+    public var fixedCanvas: FixedCanvas?
     public var method = GenerationMethod.abstract
     public var deconstruction = DeconstructionParameters()
     public var colorSeed: UInt64 = 0xCAFE_42
@@ -214,10 +215,11 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
         colorLayers[index] = value
         if index == 0 {colorSource = value.source; colorLayers[0].source = nil}
     }
-    private enum CodingKeys: String, CodingKey {case version, method, deconstruction, colorSeed, shapeSeed, mode, shapeDisplay, color, shape, appearance, colorSource, colorLayers, shapeSource, colorLocked, shapeLocked, canvasAspect}
+    private enum CodingKeys: String, CodingKey {case version, fixedCanvas, method, deconstruction, colorSeed, shapeSeed, mode, shapeDisplay, color, shape, appearance, colorSource, colorLayers, shapeSource, colorLocked, shapeLocked, canvasAspect}
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = try c.decode(Int.self,forKey:.version)
+        fixedCanvas = try c.decodeIfPresent(FixedCanvas.self,forKey:.fixedCanvas)
         method = try c.decodeIfPresent(GenerationMethod.self,forKey:.method) ?? .abstract
         deconstruction = try c.decodeIfPresent(DeconstructionParameters.self,forKey:.deconstruction) ?? DeconstructionParameters()
         colorSeed = try c.decode(UInt64.self,forKey:.colorSeed); shapeSeed = try c.decode(UInt64.self,forKey:.shapeSeed)
@@ -231,6 +233,7 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
         canvasAspect = try c.decode(Double.self,forKey:.canvasAspect)
     }
     public mutating func apply(_ preset: CompositionPreset) {
+        fixedCanvas = nil
         method = .abstract; version = 1
         shape = ShapeParameters(); appearance = AppearanceParameters()
         switch preset {

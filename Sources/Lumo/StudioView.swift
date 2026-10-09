@@ -15,7 +15,7 @@ struct StudioView: View {
     @ObservedObject var model:StudioModel
     var body: some View {
         VStack(spacing:0) {
-            header
+            header.disabled(model.isFixing)
             Divider().overlay(Theme.line)
             HStack(spacing:0) {
                 sources.frame(width:224)
@@ -24,6 +24,7 @@ struct StudioView: View {
                 Divider().overlay(Theme.line)
                 controls.frame(width:272)
             }
+            .disabled(model.isFixing)
             Divider().overlay(Theme.line)
             HStack(spacing:8) {
                 Circle().fill(model.isExporting ? Color.orange : Theme.accent).frame(width:5,height:5)
@@ -55,6 +56,8 @@ struct StudioView: View {
             Menu {ForEach(CompositionPreset.allCases,id:\.self) {preset in Button(preset.title) {model.apply(preset)}}} label: {Label("起始构成",systemImage:"square.grid.2x2")}
                 .menuStyle(.borderlessButton).fixedSize()
             Spacer(minLength:0)
+            Button {model.fixCurrentEffect()} label: {Label(model.isFixing ? "固定中…" : "固定当前效果",systemImage:"checkmark.seal")}
+                .buttonStyle(.bordered).disabled(!model.canFix).help("固定整张画布，作为下一轮输入；自动保存固定前阶段，⌘Z 可撤销").accessibilityIdentifier("fixEffect")
             HStack(spacing:8) {
                 Button {model.undo()} label: {Image(systemName:"arrow.uturn.backward")}.disabled(!model.canUndo).help("撤销 ⌘Z")
                 Button {model.redo()} label: {Image(systemName:"arrow.uturn.forward")}.disabled(!model.canRedo).help("重做 ⇧⌘Z")
@@ -78,13 +81,25 @@ struct StudioView: View {
                     Text("参考来源").font(.system(size:14,weight:.semibold))
                     Text(model.recipe.method == .abstract ? "分开取色与结构，重新构成" : "保留原图内容，分块后重新组织").font(.system(size:10)).foregroundStyle(Theme.secondary)
                 }
-                ColorSourcesView(model:model)
-                if model.recipe.method == .abstract {SourceCard(model:model,color:false)}
+                if let fixed=model.recipe.fixedCanvas {
+                    VStack(alignment:.leading,spacing:12) {
+                        Text("阶段输入 · 第 \(fixed.round) 次固定").font(.system(size:12,weight:.semibold)).foregroundStyle(Theme.accent)
+                        SourceThumbnail(source:fixed.reference).equatable().frame(height:115).frame(maxWidth:.infinity).padding(6).background(Theme.inset,in:RoundedRectangle(cornerRadius:7))
+                        Text(model.recipe.method == .abstract ? (fixed.geometry != nil ? "保留固定时的布局与形状，滑块继续变形。色彩与结构以 50 为起点，方向和色相为 0；表现参数保留原值。" : "使用固定画面的色标与结构统计生成抽象构成。再次固定后，可以保留这张新构成继续变形。") : "上一轮的全部图层已合成。打散为 0 时显示固定画面，拖动打散开始再次解构。")
+                            .font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(4)
+                        Button("导入新图片…") {model.importImage(color:true)}.buttonStyle(.bordered).controlSize(.small)
+                        Button("恢复本轮起点") {model.restoreIterationStart()}.buttonStyle(.bordered).controlSize(.small).accessibilityIdentifier("restoreStage")
+                        Text("导入后从新参考开始；可从下方阶段记录恢复。").font(.system(size:9)).foregroundStyle(Theme.secondary)
+                    }
+                } else {
+                    ColorSourcesView(model:model)
+                    if model.recipe.method == .abstract {SourceCard(model:model,color:false)}
+                }
                 Button {model.randomize()} label: {Label("全部随机",systemImage:"shuffle").frame(maxWidth:.infinity)}
                     .buttonStyle(.bordered).controlSize(.large).disabled(model.recipe.colorLocked && model.recipe.shapeLocked).help("尊重两个来源的锁定状态")
                 Divider().overlay(Theme.line)
                 HStack {
-                    Text("收藏").font(.system(size:12,weight:.semibold))
+                    Text("阶段与收藏").font(.system(size:12,weight:.semibold))
                     Spacer(); Text("\(model.snapshots.count)").font(.system(size:10,design:.monospaced)).foregroundStyle(Theme.secondary)
                 }
                 if model.snapshots.isEmpty {
@@ -178,7 +193,7 @@ struct StudioView: View {
                 }.disabled(model.recipe.mode == .shape).opacity(model.recipe.mode == .shape ? 0.38 : 1)
                 Divider().overlay(Theme.line)
                 VStack(spacing:16) {
-                    groupHeader("结构") {model.edit {$0.shape=$0.shapeSource?.features.map(ShapeParameters.init(features:)) ?? ShapeParameters()}}
+                    groupHeader("结构") {model.edit {$0.shape=$0.fixedCanvas?.geometry != nil ? .continuation : ($0.shapeSource?.features.map(ShapeParameters.init(features:)) ?? ShapeParameters())}}
                     parameter("密度",\.shape.density)
                     parameter("块面尺度",\.shape.scale)
                     parameter("大小差异",\.shape.variation)
@@ -190,7 +205,7 @@ struct StudioView: View {
                 }
                 Divider().overlay(Theme.line)
                 VStack(spacing:16) {
-                    groupHeader("表现") {model.edit {$0.appearance=AppearanceParameters()}}
+                    groupHeader("表现") {model.edit {$0.appearance=$0.fixedCanvas?.geometry?.appearance ?? AppearanceParameters()}}
                     if model.recipe.mode != .shape || model.recipe.shapeDisplay == .solid {parameter("边缘软硬",\.appearance.softness,left:"清晰",right:"柔软")}
                     if model.recipe.mode == .combined || (model.recipe.mode == .shape && model.recipe.shapeDisplay == .outline) {
                         parameter("线条粗细",\.appearance.lineWidth)
@@ -237,7 +252,7 @@ struct StudioView: View {
             Divider().overlay(Theme.line)
             parameter("碎片边缘",\.deconstruction.softness,left:"清晰",right:"柔软")
             Button("查看完整原图") {model.edit {$0.deconstruction.breakup=0}}.buttonStyle(.bordered).controlSize(.small)
-            Text("三张图片分别分块，按左侧层间混合叠合。原图中的人物、物体等内容也会保留。\n\n旧项目使用已保存的预览；重新导入可保存最高 4096 像素的参考。局部放大清晰度受参考分辨率限制。").font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(4)
+            Text(model.recipe.fixedCanvas != nil ? "当前使用上一轮合成的整张画布。再次固定可把这一轮结果作为下一轮输入。\n\n固定输入长边为 4096 像素；局部放大不增加新的细节。" : "三张图片分别分块，按左侧层间混合叠合。原图中的人物、物体等内容也会保留。\n\n旧项目使用已保存的预览；重新导入可保存最高 4096 像素的参考。局部放大清晰度受参考分辨率限制。").font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(4)
         }
     }
     private func groupHeader(_ title:String,reset:@escaping()->Void) -> some View {

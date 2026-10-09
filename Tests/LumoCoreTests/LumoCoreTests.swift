@@ -491,6 +491,107 @@ final class LumoCoreTests:XCTestCase {
             XCTAssertNotNil(props[kCGImagePropertyProfileName])
         }
     }
+    func testDeconstructionFixBakesAllLayersAndCutsTheNewPicture() throws {
+        let root=try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
+        var recipe=GenerationRecipe(); recipe.method = .deconstruction; recipe.version=3
+        recipe.deconstruction.breakup=0.65; recipe.deconstruction.sizeVariation=0.8
+        for layer in 0..<3 {
+            let url=root.appendingPathComponent("source\(layer).png")
+            try fixture(url,width:128,height:128) {c in
+                c.setFillColor(CGColor(srgbRed:Double(layer+1)/4,green:0.3,blue:0.8,alpha:1)); c.fill(CGRect(x:0,y:0,width:128,height:128))
+                c.setFillColor(CGColor(srgbRed:0.9,green:0.2,blue:0.15,alpha:0.7)); c.fillEllipse(in:CGRect(x:13,y:32,width:60,height:50))
+            }
+            let source=try ReferenceAnalyzer.analyze(url:url,forColor:true)
+            recipe.setLayer(layer) {$0.source=source; $0.blend=layer==0 ? .normal : .overlay; $0.opacity=layer==0 ? 1 : 0.7; $0.blockBlend = .softLight; $0.blockOpacity=0.8}
+            try FileManager.default.removeItem(at:url)
+        }
+        let renderer=try MetalRenderer(), before=SceneGenerator.generate(recipe)
+        let expected=try renderer.image(scene:before,width:512,height:512)
+        var fixed=try EffectCommitter.prepare(recipe:recipe,scene:before,renderer:renderer,longEdge:512)
+        XCTAssertEqual(fixed.version,4); XCTAssertEqual(fixed.fixedCanvas?.round,1)
+        XCTAssertEqual(fixed.deconstruction.breakup,0); XCTAssertNotEqual(recipe.shapeSeed,fixed.shapeSeed)
+        XCTAssertEqual((0..<3).filter {fixed.layer($0).source != nil}.count,1)
+        XCTAssertEqual(fixed.layer(0).blend,.normal); XCTAssertEqual(fixed.layer(0).opacity,1)
+        let assembled=SceneGenerator.generate(fixed), actual=try renderer.image(scene:assembled,width:512,height:512)
+        let a=Array(expected.dataProvider!.data! as Data), b=Array(actual.dataProvider!.data! as Data)
+        XCTAssertLessThan(zip(a,b).filter {abs(Int($0)-Int($1))>2}.count,30,"Fix must keep the complete blended canvas without mixing the original sources twice")
+        var history=RecipeHistory(); history.record(before:recipe,after:fixed)
+        XCTAssertEqual(history.undo(fixed),recipe); XCTAssertEqual(history.redo(recipe),fixed)
+        fixed.deconstruction.breakup=0.7
+        let cut=SceneGenerator.generate(fixed)
+        XCTAssertNotEqual(cut.fragments.map(\.contour),assembled.fragments.map(\.contour))
+        XCTAssertEqual(cut.layers[0].source!.renderImage,fixed.fixedCanvas!.reference.renderImage)
+        let second=try EffectCommitter.prepare(recipe:fixed,scene:cut,renderer:renderer,longEdge:512)
+        XCTAssertEqual(second.fixedCanvas?.round,2)
+        XCTAssertNotEqual(second.colorSource!.renderImage,fixed.colorSource!.renderImage)
+        var project=LumoProject(); project.recipe=second; project.snapshots=[SavedSnapshot(name:"第一轮",recipe:fixed),SavedSnapshot(name:"原始",recipe:recipe)]
+        let path=root.appendingPathComponent("stages.lumo"); try ProjectStore.save(project,to:path)
+        let opened=try ProjectStore.open(path)
+        XCTAssertEqual(opened.recipe,project.recipe); XCTAssertEqual(opened.export,project.export)
+        XCTAssertEqual(opened.snapshots.map(\.recipe),project.snapshots.map(\.recipe))
+        XCTAssertEqual(opened.snapshots.map(\.name),project.snapshots.map(\.name))
+        for (a,b) in zip(opened.snapshots,project.snapshots) {XCTAssertLessThan(abs(a.date.timeIntervalSince(b.date)),0.001)}
+        XCTAssertEqual(SceneGenerator.generate(opened.recipe),SceneGenerator.generate(second))
+    }
+    func testAbstractFixKeepsLayoutAndAccumulatesFurtherDeformation() throws {
+        let renderer=try MetalRenderer()
+        var recipe=GenerationRecipe(); recipe.shape.organic=0.8; recipe.shape.erosion=0.5
+        recipe.shape.density=0.7; recipe.color.hue=37; recipe.appearance.softness=0.3
+        let original=SceneGenerator.generate(recipe)
+        var fixed=try EffectCommitter.prepare(recipe:recipe,scene:original,renderer:renderer,longEdge:256)
+        XCTAssertEqual(SceneGenerator.generate(fixed),original,"Fixing abstract generation must preserve exact editable geometry, colors, blending and appearance")
+        XCTAssertEqual(fixed.shape,.continuation); XCTAssertEqual(fixed.color,ColorParameters())
+        fixed.shape.organic=0.9; fixed.shape.scale=0.65
+        let next=SceneGenerator.generate(fixed)
+        XCTAssertEqual(next.shapes.map(\.center),original.shapes.map(\.center),"Organic and size changes retain the committed layout")
+        XCTAssertNotEqual(next.shapes.map(\.contour),original.shapes.map(\.contour))
+        let second=try EffectCommitter.prepare(recipe:fixed,scene:next,renderer:renderer,longEdge:256)
+        XCTAssertEqual(SceneGenerator.generate(second),next); XCTAssertEqual(second.fixedCanvas?.round,2)
+        var continued=second; continued.shape.organic=0.9
+        XCTAssertNotEqual(SceneGenerator.generate(continued).shapes.map(\.contour),next.shapes.map(\.contour))
+        continued.shape = .continuation; XCTAssertEqual(SceneGenerator.generate(continued),next)
+        continued.color.hue=80
+        let recolored=SceneGenerator.generate(continued)
+        XCTAssertEqual(recolored.shapes.map(\.contour),next.shapes.map(\.contour)); XCTAssertNotEqual(recolored.shapes.map(\.color),next.shapes.map(\.color))
+        continued.color=ColorParameters(); continued.shape.density=1
+        XCTAssertGreaterThan(SceneGenerator.generate(continued).shapes.count,next.shapes.count)
+        var project=LumoProject(); project.recipe=second; project.snapshots=[SavedSnapshot(name:"固定前",recipe:recipe)]
+        let root=try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
+        let url=root.appendingPathComponent("abstract-stages.lumo"); try ProjectStore.save(project,to:url)
+        XCTAssertEqual(SceneGenerator.generate(try ProjectStore.open(url).recipe),next)
+        project.recipe.fixedCanvas!.geometry!.shapes[0].center.x = .infinity
+        XCTAssertThrowsError(try ProjectStore.validate(project))
+    }
+    func testFixedStagesSupportModesAndPlainCanvasWithoutExternalFiles() throws {
+        let renderer=try MetalRenderer()
+        for mode in DisplayMode.allCases {
+            var recipe=GenerationRecipe(); recipe.mode=mode; recipe.shapeDisplay = .outline
+            let scene=SceneGenerator.generate(recipe)
+            let fixed=try EffectCommitter.prepare(recipe:recipe,scene:scene,renderer:renderer,longEdge:256)
+            XCTAssertEqual(SceneGenerator.generate(fixed),scene)
+            var switched=fixed; switched.mode = .shape
+            XCTAssertEqual(SceneGenerator.generate(switched).background,.white)
+            XCTAssertEqual(SceneGenerator.generate(switched).shapes.map(\.contour),scene.shapes.map(\.contour))
+            _=try renderer.image(scene:SceneGenerator.generate(fixed),width:256,height:256)
+            var invalid=fixed; invalid.version=3
+            var project=LumoProject(); project.recipe=invalid
+            XCTAssertThrowsError(try ProjectStore.validate(project))
+        }
+        var plain=GenerationRecipe(); plain.method = .deconstruction; plain.version=3; plain.deconstruction.breakup=0
+        let root=try temporaryDirectory(); defer {try? FileManager.default.removeItem(at:root)}
+        let url=root.appendingPathComponent("plain.png")
+        try fixture(url,width:64,height:64) {c in c.setFillColor(CGColor(srgbRed:0.5,green:0.5,blue:0.5,alpha:1)); c.fill(CGRect(x:0,y:0,width:64,height:64))}
+        plain.colorSource=try ReferenceAnalyzer.analyze(url:url,forColor:true)
+        var fixed=try EffectCommitter.prepare(recipe:plain,scene:SceneGenerator.generate(plain),renderer:renderer,longEdge:128)
+        XCTAssertNotNil(fixed.fixedCanvas); XCTAssertNil(fixed.colorSource!.features)
+        fixed.method = .abstract
+        let generated=SceneGenerator.generate(fixed)
+        fixed=try EffectCommitter.prepare(recipe:fixed,scene:generated,renderer:renderer,longEdge:128)
+        fixed.color.dominance=0
+        _=try renderer.image(scene:SceneGenerator.generate(fixed),width:128,height:128)
+        var empty=GenerationRecipe(); empty.method = .deconstruction; empty.version=3
+        XCTAssertThrowsError(try EffectCommitter.prepare(recipe:empty,scene:SceneGenerator.generate(empty),renderer:renderer,longEdge:128))
+    }
     private func temporaryDirectory() throws -> URL {let url=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); try FileManager.default.createDirectory(at:url,withIntermediateDirectories:true); return url}
     private func fixture(_ url:URL,width:Int,height:Int,draw:(CGContext)->Void) throws {
         let c=CGContext(data:nil,width:width,height:height,bitsPerComponent:8,bytesPerRow:0,space:CGColorSpace(name:CGColorSpace.sRGB)!,bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!

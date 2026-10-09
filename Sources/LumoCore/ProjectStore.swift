@@ -2,6 +2,9 @@ import Foundation
 
 public enum ProjectStore {
     public static func save(_ project: LumoProject, to url: URL) throws {
+        try documentData(project).write(to:url,options:.atomic)
+    }
+    public static func documentData(_ project: LumoProject) throws -> Data {
         try validate(project)
         let archive = ReferenceArchive()
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .millisecondsSince1970; encoder.userInfo[.referenceArchive] = archive
@@ -10,7 +13,7 @@ public enum ProjectStore {
         document["referenceImages"] = archive.images.mapValues {$0.base64EncodedString()}
         let data = try JSONSerialization.data(withJSONObject:document,options:[.prettyPrinted,.sortedKeys])
         guard data.count <= 128*1024*1024 else {throw LumoError.message("项目超过 128 MB，请减少使用不同参考图的收藏后再保存。")}
-        try data.write(to:url,options:.atomic)
+        return data
     }
     public static func open(_ url: URL) throws -> LumoProject {
         let size = try url.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? 0
@@ -31,7 +34,7 @@ public enum ProjectStore {
     public static func validate(_ project: LumoProject) throws {
         guard (1...2).contains(project.formatVersion), project.snapshots.count <= 100 else { throw LumoError.message("项目版本不受支持，或收藏数量超过限制。") }
         for recipe in [project.recipe]+project.snapshots.map(\.recipe) {
-            guard (1...3).contains(recipe.version), recipe.method != .deconstruction || recipe.version == (recipe.deconstruction.expandedTransforms ? 3 : 2) else { throw LumoError.message("这个项目使用了更新的生成器版本。") }
+            guard (1...4).contains(recipe.version), (recipe.fixedCanvas != nil ? recipe.version == 4 : recipe.version <= 3), recipe.fixedCanvas != nil || recipe.method != .deconstruction || recipe.version == (recipe.deconstruction.expandedTransforms ? 3 : 2) else { throw LumoError.message("这个项目使用了更新的生成器版本。") }
             let normalized = [recipe.color.saturation,recipe.color.brightness,recipe.color.contrast,recipe.color.dominance,recipe.shape.density,recipe.shape.scale,recipe.shape.variation,recipe.shape.curvature,recipe.shape.stretch,recipe.shape.clustering,recipe.shape.coherence,recipe.shape.organic,recipe.shape.erosion,recipe.appearance.softness,recipe.appearance.lineWidth,recipe.appearance.lineStrength,recipe.deconstruction.granularity,recipe.deconstruction.breakup,recipe.deconstruction.rotation,recipe.deconstruction.sizeVariation,recipe.deconstruction.overlap,recipe.deconstruction.grouping]
             guard (normalized+[recipe.deconstruction.softness]).allSatisfy({ $0.isFinite && (0...1).contains($0) }), recipe.color.hue.isFinite, (-180...180).contains(recipe.color.hue), recipe.shape.direction.isFinite, (-180...180).contains(recipe.shape.direction), recipe.canvasAspect.isFinite, (0.25...4).contains(recipe.canvasAspect) else { throw LumoError.message("项目包含无效的调节参数。") }
             guard recipe.colorLayers.count == 3 else {throw LumoError.message("项目必须包含三个颜色层。")}
@@ -40,7 +43,27 @@ public enum ProjectStore {
                       layer.paletteOverrides.allSatisfy({(0..<6).contains($0.key) && [$0.value.r,$0.value.g,$0.value.b].allSatisfy {$0.isFinite && (0...1).contains($0)}}),
                       layer.weightOverrides.allSatisfy({(0..<6).contains($0.key) && $0.value.isFinite && (0.001...1).contains($0.value)}) else {throw LumoError.message("颜色层包含无效的混合或色标参数。")}
             }
-            for source in [recipe.colorSource,recipe.shapeSource,recipe.colorLayers[1].source,recipe.colorLayers[2].source].compactMap({$0}) {
+            var references=[recipe.colorSource,recipe.shapeSource,recipe.colorLayers[1].source,recipe.colorLayers[2].source].compactMap({$0})
+            if let fixed=recipe.fixedCanvas {
+                guard (1...1000).contains(fixed.round), fixed.reference.renderImage != nil, recipe.colorSource==fixed.reference else {throw LumoError.message("固定阶段包含无效的输入图片。")}
+                references.append(fixed.reference)
+                if let geometry=fixed.geometry {
+                    guard geometry.method == .abstract, geometry.fragments.isEmpty, geometry.shapes.count<=768, geometry.layers.count==3, geometry.aspect.isFinite, (0.25...4).contains(geometry.aspect),
+                          [geometry.background.r,geometry.background.g,geometry.background.b].allSatisfy({$0.isFinite && (0...1).contains($0)}),
+                          [geometry.appearance.softness,geometry.appearance.lineWidth,geometry.appearance.lineStrength].allSatisfy({$0.isFinite && (0...1).contains($0)}),
+                          Set(geometry.shapes.map(\.id)).count==geometry.shapes.count else {throw LumoError.message("固定阶段的布局数据无效。")}
+                    for shape in geometry.shapes {
+                        guard (0..<100_000).contains(shape.id), (0..<3).contains(shape.layer), (3...128).contains(shape.contour.count),
+                              (shape.contour+[shape.center]).allSatisfy({$0.x.isFinite && $0.y.isFinite}), shape.opacity.isFinite, (0...1).contains(shape.opacity), shape.gradient.isFinite, (0...1).contains(shape.gradient),
+                              [shape.color.r,shape.color.g,shape.color.b].allSatisfy({$0.isFinite && (0...1).contains($0)}) else {throw LumoError.message("固定阶段包含无效的形状。")}
+                    }
+                    for layer in geometry.layers {
+                        guard [layer.opacity,layer.blockOpacity].allSatisfy({$0.isFinite && (0...1).contains($0)}) else {throw LumoError.message("固定阶段的图层数据无效。")}
+                    }
+                    references += geometry.layers.compactMap(\.source)
+                }
+            }
+            for source in references {
                 guard source.thumbnail.count <= 2*1024*1024 else { throw LumoError.message("项目参考缩略图过大。") }
                 guard (source.samplingImage?.count ?? 0) <= 16*1024*1024 else {throw LumoError.message("项目取色预览过大。")}
                 guard (source.renderImage?.count ?? 0) <= 32*1024*1024 else {throw LumoError.message("项目解构图片过大。")}

@@ -2,7 +2,7 @@ import Foundation
 import ImageIO
 import simd
 
-public struct ImageFragment: Equatable, Sendable {
+public struct ImageFragment: Codable, Equatable, Sendable {
     public var id: Int
     public var layer: Int
     public var center: SIMD2<Float>
