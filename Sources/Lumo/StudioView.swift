@@ -219,6 +219,20 @@ struct StudioView: View {
     }
     private var aspectTitle:String {let a=model.recipe.canvasAspect; return abs(a-1)<0.01 ? "1:1" : (abs(a-4.0/3)<0.01 ? "4:3" : (abs(a-3.0/4)<0.01 ? "3:4" : "16:9"))}
     private var controls:some View {
+        VStack(spacing:0) {
+            controlList
+            Divider().overlay(Theme.line)
+            Button {model.randomizeParameters()} label: {
+                Label("随机参数",systemImage:"dice").frame(maxWidth:.infinity)
+            }
+            .buttonStyle(.bordered).controlSize(.regular)
+            .disabled(!model.canRandomizeParameters)
+            .help("独立随机当前调节范围的参数，保留来源和随机种子。⌘Z 可撤销。")
+            .accessibilityIdentifier("randomizeParameters")
+            .padding(.horizontal,20).padding(.vertical,12)
+        }.background(Theme.panel)
+    }
+    private var controlList:some View {
         ScrollView {
             VStack(alignment:.leading,spacing:24) {
                 HStack {Text("调节构成").font(.system(size:14,weight:.semibold)); Spacer(); Image(systemName:"slider.horizontal.3").foregroundStyle(Theme.secondary)}
@@ -271,7 +285,7 @@ struct StudioView: View {
                 }
                 Text(model.isShowingLines ? "后台提取完成后更新画面。松开滑块可撤销这次调节；导出沿用当前线稿。" : "拖动保留随机基础，松开后可撤销这次调节。").font(.system(size:10)).foregroundStyle(Theme.secondary).lineSpacing(3)
             }.padding(20)
-        }.background(Theme.panel)
+        }
     }
     private var lineControls: some View {
         VStack(alignment:.leading,spacing:20) {

@@ -264,6 +264,44 @@ private struct CompositionState: Equatable {
         edit { r in if color {r.randomizeColor()}; if shape {r.randomizeShape()} }
         status = recipe.method == .deconstruction ? "已重新分块或更换碎片叠放；锁定的来源保持不变" : "已生成新的构成；锁定的来源保持不变"
     }
+    var canRandomizeParameters: Bool {
+        !isEditingBlocked && !isLoadingProject && (isShowingLines || recipe.method != .deconstruction || !cutLayerLocked)
+    }
+    func randomizeParameters() {
+        guard canRandomizeParameters else {return}
+        func unit() -> Double {Double.random(in:0...1)}
+        if isShowingLines {
+            editLine {p in
+                p.preset=LineExtractionPreset.allCases.randomElement() ?? p.preset
+                p.opacity=unit()
+                p.contrast=Double.random(in:0.5...3)
+                p.brightness=Double.random(in:-0.3...0.3)
+                p.thickness=Double.random(in:0...3)
+                p.edgeStrength=Double.random(in:0...3)
+                p.overlayOriginal=Bool.random()
+            }
+        } else if recipe.method == .deconstruction {
+            editCuts {p in
+                p.expandedTransforms=true; p.strongTransforms=true
+                p.granularity=unit(); p.breakup=unit(); p.rotation=unit()
+                p.sizeVariation=unit(); p.overlap=unit(); p.spacing=unit()
+                p.grouping=unit(); p.softness=unit(); p.organicCuts=Bool.random()
+            }
+            status="已随机调节\(editingCutLayer.map {"第 \($0+1) 层"} ?? "全局")解构参数；⌘Z 撤销"
+        } else {
+            edit {r in
+                r.color.hue=Double.random(in:-180...180)
+                r.color.saturation=unit(); r.color.brightness=unit(); r.color.contrast=unit(); r.color.dominance=unit()
+                r.shape.density=unit(); r.shape.scale=unit(); r.shape.variation=unit(); r.shape.curvature=unit()
+                r.shape.organic=unit(); r.shape.erosion=unit(); r.shape.stretch=unit()
+                r.shape.direction=Double.random(in:-180...180)
+                r.shape.clustering=unit(); r.shape.coherence=unit()
+                r.appearance.softness=unit(); r.appearance.lineWidth=unit(); r.appearance.lineStrength=unit()
+                if r.mode == .shape {r.shapeDisplay=ShapeDisplay.allCases.randomElement() ?? r.shapeDisplay}
+            }
+            status="已随机调节构成参数；⌘Z 撤销"
+        }
+    }
     func restoreIterationStart() {
         guard let fixed=recipe.fixedCanvas else {return}
         edit {r in
