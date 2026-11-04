@@ -56,10 +56,20 @@ struct StudioView: View {
     }
     private var header:some View {
         HStack(spacing:18) {
-            HStack(spacing:8) {
-                Image(systemName:"square.stack.3d.up.fill").font(.system(size:18)).foregroundStyle(Theme.accent)
-                Text("LUMO").font(.system(size:15,weight:.semibold,design:.rounded)).tracking(2)
-            }.frame(width:185,alignment:.leading)
+            HStack(spacing:12) {
+                HStack(spacing:8) {
+                    Image(systemName:"square.stack.3d.up.fill").font(.system(size:18)).foregroundStyle(Theme.accent)
+                    Text("LUMO").font(.system(size:15,weight:.semibold,design:.rounded)).tracking(2)
+                }
+                Button {model.newProject()} label: {
+                    Label("新建构成",systemImage:"plus")
+                }
+                .buttonStyle(.bordered)
+                .fixedSize()
+                .disabled(model.isProjectBusy)
+                .help("新建构成 · ⌘N")
+                .accessibilityIdentifier("newComposition")
+            }.frame(minWidth:185,alignment:.leading)
             if model.isShowingLines {
                 Label("线条提取",systemImage:"scribble.variable").font(.system(size:12,weight:.medium)).foregroundStyle(Theme.accent).frame(width:210,alignment:.leading)
             } else if model.recipe.method == .abstract {

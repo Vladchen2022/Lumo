@@ -8,7 +8,7 @@ Lumo is an open-source native macOS tool for abstract compositions, image decons
 
 ## 下载与安装
 
-从 [Releases](https://github.com/Vladchen2022/Lumo/releases) 下载 `Lumo-0.7.1-macOS-arm64.zip`，解压后把 `Lumo.app` 拖进“应用程序”文件夹。要求 macOS 14+ 和 Apple Silicon；Intel Mac 尚未验证。
+从 [Releases](https://github.com/Vladchen2022/Lumo/releases) 下载 `Lumo-0.7.2-macOS-arm64.zip`，解压后把 `Lumo.app` 拖进“应用程序”文件夹。要求 macOS 14+ 和 Apple Silicon；Intel Mac 尚未验证。
 
 下载包包含 App、MIT 许可证、安装说明，另提供 SHA-256 校验文件。发布应用使用本机临时签名，尚未进行 Developer ID 签名和 Apple 公证，首次启动可能受 macOS 安全检查限制。兼容性与性能的实测范围见 [VALIDATION.md](VALIDATION.md)。
 
@@ -59,6 +59,8 @@ bash Scripts/export-app.sh
 - 点击收藏可并排比较和改名，确认「恢复此收藏」才替换画面。固定、收藏、删除和改名都可以整次撤销及重做。
 
 ## 使用
+
+点击窗口左上角的「新建构成」或按 ⌘N，即可从默认构成重新开始。有未保存的修改时，Lumo 会先询问是否保存。
 
 1. 分别导入颜色和形状参考，或直接从随机构成开始。颜色来源支持三张图片，可以逐层替换，也可以用“导入三张…”批量导入，按文件名顺序放入层 1–3。支持 PNG、JPEG、HEIC、TIFF。
 2. 选择颜色层，为该层调整正常、正片叠底、滤色、叠加、柔光及整层透明度。“色块内部混合”控制该层生成的色块如何互相混合，以及色块本身的透明度。眼睛按钮可以隐藏该层。
