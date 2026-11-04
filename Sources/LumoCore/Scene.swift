@@ -33,6 +33,8 @@ public struct AbstractScene: Codable, Equatable, Sendable {
     public var fragments: [ImageFragment] = []
     public var layerOrder: [Int]?
     public var fragmentSoftness: [Double]?
+    public var study: StudySettings?
+    public var studySeed: UInt32?
     public var lineInput: SourceReference?
     public var lineParameters: LineExtractionParameters?
     /// Derived mask; never stored in a project recipe.
@@ -80,6 +82,9 @@ public enum SceneGenerator {
         return originals.enumerated().map { PaletteEntry(adjusted ? adjust($0.element.color, parameters: recipe.color) : $0.element.color, weights[$0.offset] / sum) }
     }
     public static func generate(_ recipe: GenerationRecipe) -> AbstractScene {
+        StudyComposition.applying(to:baseScene(recipe),recipe:recipe)
+    }
+    static func baseScene(_ recipe: GenerationRecipe) -> AbstractScene {
         if recipe.lineExtraction.enabled, let fixed = recipe.fixedCanvas {
             return AbstractScene(aspect:recipe.canvasAspect,background:.white,shapes:[],mode:.color,shapeDisplay:.solid,appearance:recipe.appearance,lineInput:fixed.reference,lineParameters:recipe.lineExtraction)
         }

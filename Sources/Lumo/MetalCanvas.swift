@@ -39,7 +39,7 @@ struct MetalCanvas: NSViewRepresentable {
             resize(view)
             guard let scene, let drawable=view.currentDrawable,let pass=view.currentRenderPassDescriptor,let command=renderer.queue.makeCommandBuffer() else {return}
             do {
-                try renderer.encode(scene:scene,viewport:CGRect(x:0,y:0,width:scene.aspect,height:1),pass:pass,command:command)
+                try renderer.encode(scene:scene,viewport:CGRect(x:0,y:0,width:scene.aspect,height:1),pass:pass,command:command,opaqueStudyMask:true)
                 if WindowMetrics.enabled {drawable.addPresentedHandler {WindowMetrics.shared.presented($0.presentedTime)}}
                 command.present(drawable); command.commit()
             } catch {

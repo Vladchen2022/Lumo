@@ -197,6 +197,7 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
     public var method = GenerationMethod.abstract
     public var deconstruction = DeconstructionParameters()
     public var arrangement = FragmentArrangement()
+    public var study: StudySettings?
     public var colorSeed: UInt64 = 0xCAFE_42
     public var shapeSeed: UInt64 = 0xBEEF_31
     public var mode = DisplayMode.combined
@@ -212,6 +213,7 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
     public var canvasAspect = 1.0
     public init() {}
     public var currentVersion: Int {
+        if let study,study != StudySettings() {return 8}
         if arrangement != FragmentArrangement() || deconstruction.organicCuts || deconstruction.spacing != 0.5 {return 7}
         if method == .deconstruction && deconstruction.strongTransforms {return 6}
         if lineExtraction != LineExtractionParameters() {return 5}
@@ -231,7 +233,7 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
         colorLayers[index] = value
         if index == 0 {colorSource = value.source; colorLayers[0].source = nil}
     }
-    private enum CodingKeys: String, CodingKey {case version, fixedCanvas, lineExtraction, method, deconstruction, arrangement, colorSeed, shapeSeed, mode, shapeDisplay, color, shape, appearance, colorSource, colorLayers, shapeSource, colorLocked, shapeLocked, canvasAspect}
+    private enum CodingKeys: String, CodingKey {case version, fixedCanvas, lineExtraction, method, deconstruction, arrangement, study, colorSeed, shapeSeed, mode, shapeDisplay, color, shape, appearance, colorSource, colorLayers, shapeSource, colorLocked, shapeLocked, canvasAspect}
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = try c.decode(Int.self,forKey:.version)
@@ -240,6 +242,7 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
         method = try c.decodeIfPresent(GenerationMethod.self,forKey:.method) ?? .abstract
         deconstruction = try c.decodeIfPresent(DeconstructionParameters.self,forKey:.deconstruction) ?? DeconstructionParameters()
         arrangement = try c.decodeIfPresent(FragmentArrangement.self,forKey:.arrangement) ?? FragmentArrangement()
+        study = try c.decodeIfPresent(StudySettings.self,forKey:.study)
         colorSeed = try c.decode(UInt64.self,forKey:.colorSeed); shapeSeed = try c.decode(UInt64.self,forKey:.shapeSeed)
         mode = try c.decode(DisplayMode.self,forKey:.mode); shapeDisplay = try c.decode(ShapeDisplay.self,forKey:.shapeDisplay)
         color = try c.decode(ColorParameters.self,forKey:.color); shape = try c.decode(ShapeParameters.self,forKey:.shape)

@@ -33,7 +33,7 @@ public enum EffectCommitter {
         reference.renderImage=pixels
         reference.features=(try? ReferenceAnalyzer.analyze(data:pixels,name:reference.name,forColor:false))?.features
         var next=recipe
-        next.fixedCanvas=FixedCanvas(round:round,reference:reference,geometry:recipe.method == .abstract && !recipe.lineExtraction.enabled ? scene : nil,colorSeed:recipe.colorSeed,shapeSeed:recipe.shapeSeed)
+        next.fixedCanvas=FixedCanvas(round:round,reference:reference,geometry:recipe.method == .abstract && !recipe.lineExtraction.enabled ? (scene.study == nil ? scene : SceneGenerator.baseScene(recipe)) : nil,colorSeed:recipe.colorSeed,shapeSeed:recipe.shapeSeed)
         // All visible source layers are already baked into the captured input.
         var inputs=GenerationRecipe()
         inputs.colorSource=reference
@@ -43,6 +43,7 @@ public enum EffectCommitter {
         next.arrangement=FragmentArrangement()
         if recipe.lineExtraction.enabled {next.method = .deconstruction}
         if next.method == .deconstruction {
+            next.study=nil
             next.deconstruction.expandedTransforms=true
             next.deconstruction.breakup=0
             next.shapeSeed &+= 0xD1B54A32D192ED03

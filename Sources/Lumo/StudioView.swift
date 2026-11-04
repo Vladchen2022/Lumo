@@ -15,6 +15,7 @@ struct StudioView: View {
     @ObservedObject var model:StudioModel
     @State private var canvasZoom=1.0
     @State private var showDraftActions=false
+    @State private var showStudyDesk=false
     var body: some View {
         VStack(spacing:0) {
             header.disabled(model.isEditingBlocked)
@@ -42,6 +43,7 @@ struct StudioView: View {
         .background(Theme.background).foregroundStyle(.white.opacity(0.88))
         .frame(minWidth:1120,minHeight:730)
         .preferredColorScheme(.dark).tint(Theme.accent)
+        .sheet(isPresented:$showStudyDesk) {StudyDesk(model:model)}
         .sheet(isPresented:$model.showExportSheet) {ExportSheet(model:model)}
         .sheet(isPresented:$model.showColorPicker) {ReferenceColorPicker(model:model,layer:model.selectedColorLayer)}
         .sheet(item:$model.comparison) {snapshot in ComparisonSheet(model:model,snapshot:snapshot,current:model.recipe)}
@@ -166,6 +168,8 @@ struct StudioView: View {
                             .accessibilityIdentifier("editFragments")
                     }
                     if !model.isShowingLines {
+                        Button("研究台") {showStudyDesk=true}.accessibilityIdentifier("openStudyDesk")
+                            .disabled(model.renderer == nil || (model.recipe.method == .deconstruction && model.scene.fragments.isEmpty))
                         Button("试提线稿") {model.extractLines()}.disabled(!model.canExtractLines).accessibilityIdentifier("tryLines")
                     }
                     Menu {

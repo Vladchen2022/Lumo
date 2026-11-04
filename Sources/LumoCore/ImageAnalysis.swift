@@ -131,8 +131,12 @@ public struct ReferencePixels: @unchecked Sendable {
     public var rgbaBytes: [UInt8] {pixels}
     public init(data: Data) throws {
         guard let source = CGImageSourceCreateWithData(data as CFData,nil), let image = CGImageSourceCreateImageAtIndex(source,0,nil), image.width*image.height <= 16_777_216 else {throw LumoError.message("无法读取取色预览。")}
-        self.image = image; width = image.width; height = image.height
-        pixels = try Self.convert(image)
+        try self.init(image:image)
+    }
+    public init(image:CGImage) throws {
+        guard image.width>0,image.height>0,image.width<=16_777_216/image.height else {throw LumoError.message("无法读取取色预览。")}
+        self.image=image; width=image.width; height=image.height
+        pixels=try Self.convert(image)
     }
     public func color(x: Double, y: Double) -> RGBColor? {
         guard (0...1).contains(x), (0...1).contains(y) else {return nil}

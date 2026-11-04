@@ -11,6 +11,16 @@ private struct MeshVertex {
     var blend: UInt32
 }
 private struct RenderUniforms { var viewport: SIMD4<Float> }
+private struct StudyUniforms {
+    var viewport: SIMD4<Float>
+    var values: SIMD4<Float>
+    var texture: SIMD4<Float>
+    var whitespace: SIMD4<Float>
+    var mask: SIMD4<Float>
+    var background: SIMD4<Float>
+    var options: SIMD4<Float>
+    var seed: SIMD4<UInt32>
+}
 private struct LayerUniforms { var opacity: Float; var blend: UInt32 }
 private struct FragmentVertex {
     var position: SIMD2<Float>
@@ -25,6 +35,7 @@ public final class MetalRenderer: @unchecked Sendable {
     private let pipeline: MTLRenderPipelineState
     private let compositePipeline: MTLRenderPipelineState
     private let fragmentPipeline: MTLRenderPipelineState
+    private let studyPipeline: MTLRenderPipelineState
     private let lineProcessor = LineExtractionProcessor()
     private let textureLock = NSLock()
     private var sourceTextures: [(Data,MTLTexture)] = []
@@ -47,6 +58,9 @@ public final class MetalRenderer: @unchecked Sendable {
         descriptor.vertexFunction = library.makeFunction(name:"lumoImageVertex")
         descriptor.fragmentFunction = library.makeFunction(name:"lumoImageFragment")
         fragmentPipeline = try device.makeRenderPipelineState(descriptor:descriptor)
+        descriptor.vertexFunction=library.makeFunction(name:"lumoCompositeVertex")
+        descriptor.fragmentFunction=library.makeFunction(name:"lumoStudyFragment")
+        studyPipeline=try device.makeRenderPipelineState(descriptor:descriptor)
     }
     public func prepareLines(scene: AbstractScene) throws -> Data {
         guard let input = scene.lineInput, let parameters = scene.lineParameters else {throw LumoError.message("缺少固定的提线输入。")}
@@ -69,7 +83,50 @@ public final class MetalRenderer: @unchecked Sendable {
         encoder.setFragmentTexture(texture,index:0)
         encoder.drawPrimitives(type:.triangle,vertexStart:0,vertexCount:vertices.count); encoder.endEncoding()
     }
-    public func encode(scene: AbstractScene, viewport: CGRect, pass: MTLRenderPassDescriptor, command: MTLCommandBuffer, transparentLines: Bool = false) throws {
+    public func encode(scene:AbstractScene,viewport:CGRect,pass:MTLRenderPassDescriptor,command:MTLCommandBuffer,
+                       transparentLines:Bool=false,opaqueStudyMask:Bool=false) throws {
+        guard let study=scene.study,study.requiresPass,let output=pass.colorAttachments[0].texture else {
+            try encodeBase(scene:scene,viewport:viewport,pass:pass,command:command,transparentLines:transparentLines)
+            return
+        }
+        let descriptor=MTLTextureDescriptor.texture2DDescriptor(pixelFormat:.bgra8Unorm_srgb,width:output.width,height:output.height,mipmapped:false)
+        descriptor.storageMode = .private; descriptor.usage=[.renderTarget,.shaderRead]
+        guard let image=device.makeTexture(descriptor:descriptor) else {throw LumoError.message("研究预览的纹理内存不足。")}
+        let inputPass=MTLRenderPassDescriptor()
+        inputPass.colorAttachments[0].texture=image
+        inputPass.colorAttachments[0].loadAction = .clear
+        inputPass.colorAttachments[0].storeAction = .store
+        try encodeBase(scene:scene,viewport:viewport,pass:inputPass,command:command,transparentLines:transparentLines)
+
+        let maskTexture=try study.silhouette.map {try sourceTexture(data:$0.source.deconstructionImage)} ?? image
+        let aspect=scene.aspect
+        var mask=SIMD4<Float>(0,0,1,1)
+        var maskMode:Float=0
+        if let silhouette=study.silhouette {
+            let h=min(1,aspect/silhouette.aspect), w=h*silhouette.aspect/aspect
+            mask=SIMD4(Float((1-w)/2),Float((1-h)/2),Float(w),Float(h))
+            maskMode=silhouette.inverted ? 2 : 1
+        }
+        var whitespace=SIMD4<Float>.zero
+        if let rect=study.guides?.regions[.empty] {whitespace=SIMD4(Float(rect.x),Float(rect.y),Float(rect.width),Float(rect.height))}
+        let texture=study.texture
+        var settings=StudyUniforms(
+            viewport:SIMD4(Float(viewport.minX/aspect),Float(viewport.minY),Float(viewport.width/aspect),Float(viewport.height)),
+            values:SIMD4(Float(study.values?.low ?? -1),Float(study.values?.high ?? 0),Float(study.tone?.rawValue ?? 0),opaqueStudyMask ? 1 : 0),
+            texture:SIMD4(Float(texture?.kind.rawValue ?? 0),Float(texture?.amount ?? 0),Float(3+20*(texture?.scale ?? 0)),Float((texture?.direction ?? 0)*Double.pi/180)),
+            whitespace:whitespace,mask:mask,
+            background:SIMD4(scene.background.linear,Float(study.guides?.strength ?? 0)),
+            options:SIMD4(Float(aspect),maskMode,0,0),seed:SIMD4(scene.studySeed ?? 0,0,0,0))
+        guard let encoder=command.makeRenderCommandEncoder(descriptor:pass) else {throw LumoError.message("无法绘制构成研究预览。")}
+        encoder.setRenderPipelineState(studyPipeline)
+        encoder.setFragmentTexture(image,index:0)
+        encoder.setFragmentTexture(maskTexture,index:1)
+        encoder.setFragmentBytes(&settings,length:MemoryLayout<StudyUniforms>.stride,index:0)
+        encoder.drawPrimitives(type:.triangle,vertexStart:0,vertexCount:3)
+        encoder.endEncoding()
+    }
+
+    private func encodeBase(scene: AbstractScene, viewport: CGRect, pass: MTLRenderPassDescriptor, command: MTLCommandBuffer, transparentLines: Bool) throws {
         guard let target = pass.colorAttachments[0].texture else {throw LumoError.message("画布缺少输出纹理。")}
         func draw(_ vertices: [MeshVertex], _ pass: MTLRenderPassDescriptor) throws {
             guard !vertices.isEmpty else {return}
@@ -197,7 +254,7 @@ public final class MetalRenderer: @unchecked Sendable {
         }
         return vertices
     }
-    public func image(scene: AbstractScene, width: Int, height: Int, crop: CropRegion? = nil, transparentLines: Bool = false) throws -> CGImage {
+    public func image(scene: AbstractScene, width: Int, height: Int, crop: CropRegion? = nil, transparentLines: Bool = false, opaqueStudyMask: Bool = false) throws -> CGImage {
         guard (1...4096).contains(width), (1...4096).contains(height) else { throw LumoError.message("导出宽高必须在 1–4096 像素之间。") }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: width, height: height, mipmapped: false)
         descriptor.storageMode = .shared; descriptor.usage = [.renderTarget, .shaderRead]
@@ -207,7 +264,7 @@ public final class MetalRenderer: @unchecked Sendable {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
         let viewport = crop?.viewport(aspect: scene.aspect) ?? CGRect(x: 0, y: 0, width: scene.aspect, height: 1)
-        try encode(scene: scene, viewport: viewport, pass: pass, command: command, transparentLines:transparentLines)
+        try encode(scene: scene, viewport: viewport, pass: pass, command: command, transparentLines:transparentLines,opaqueStudyMask:opaqueStudyMask)
         command.commit(); command.waitUntilCompleted()
         if let error = command.error { throw error }
         let bytesPerRow = width * 4
@@ -217,7 +274,7 @@ public final class MetalRenderer: @unchecked Sendable {
         return image
     }
     public func export(scene: AbstractScene, settings: ExportSettings, to url: URL) throws {
-        let image = try image(scene: scene, width: settings.width, height: settings.height, crop: settings.crop, transparentLines:settings.format == .png && settings.transparentLines == true)
+        let image = try image(scene: scene, width: settings.width, height: settings.height, crop: settings.crop, transparentLines:settings.format == .png && settings.transparentLines == true,opaqueStudyMask:settings.format == .jpeg)
         let type = settings.format == .png ? UTType.png.identifier : UTType.jpeg.identifier
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, type as CFString, 1, nil) else { throw LumoError.message("无法创建导出文件。") }
@@ -246,6 +303,16 @@ public final class MetalRenderer: @unchecked Sendable {
             let fill = scene.mode != .shape || scene.shapeDisplay == .solid
             let stroke = scene.mode == .combined || (scene.mode == .shape && scene.shapeDisplay == .outline)
             let feather = min(radius * 0.35, Float(0.00065 + scene.appearance.softness * 0.027))
+            let grades=scene.study?.edges.isEmpty == false ? points.map {StudyComposition.edge(at:$0,in:scene)} : []
+            func width(_ i:Int) -> Float {
+                guard !grades.isEmpty else {return feather}
+                switch grades[i] {
+                case .sharp: return min(radius*0.35,0.00065)
+                case .soft: return min(radius*0.55,max(feather,0.026))
+                case .lost: return min(radius*0.9,max(feather,0.064))
+                case nil: return feather
+                }
+            }
             let fillColor = scene.mode == .shape ? RGBColor.ink.linear : shape.color.linear
             func shade(_ p: SIMD2<Float>) -> SIMD3<Float> {
                 let amount: Float = scene.mode == .shape ? 0 : shape.gradient
@@ -262,8 +329,8 @@ public final class MetalRenderer: @unchecked Sendable {
             }
             func offset(_ i: Int, _ amount: Float) -> SIMD2<Float> {points[i]+normals[i]*amount}
             if fill {
-                let inner = (0..<n).map { offset($0,-feather * 0.5) }
-                let outer = (0..<n).map { offset($0,feather * 0.5) }
+                let inner = (0..<n).map { offset($0,-width($0)*0.5) }
+                let outer = (0..<n).map { offset($0,width($0)*0.5) }
                 let center = vertex(shape.center,shade(shape.center),shape.opacity*blockOpacity)
                 for i in 0..<n {
                     let j = (i+1)%n
@@ -279,11 +346,19 @@ public final class MetalRenderer: @unchecked Sendable {
                 let ringOffsets = [-half-aa,-half+aa,half-aa,half+aa]
                 let alpha: Float = shape.opacity * Float(scene.appearance.lineStrength)
                 let ringAlphas: [Float] = [0,alpha,alpha,0]
+                func strokeAlpha(_ i:Int,_ ring:Int) -> Float {
+                    guard !grades.isEmpty else {return ringAlphas[ring]}
+                    switch grades[i] {
+                    case .lost: return 0
+                    case .soft: return ringAlphas[ring]*0.25
+                    default: return ringAlphas[ring]
+                    }
+                }
                 let ink = RGBColor.ink.linear
                 for ring in 0..<3 { for i in 0..<n {
                     let j = (i+1)%n
-                    let ai = vertex(offset(i,ringOffsets[ring]),ink,ringAlphas[ring]), aj = vertex(offset(j,ringOffsets[ring]),ink,ringAlphas[ring])
-                    let bi = vertex(offset(i,ringOffsets[ring+1]),ink,ringAlphas[ring+1]), bj = vertex(offset(j,ringOffsets[ring+1]),ink,ringAlphas[ring+1])
+                    let ai = vertex(offset(i,ringOffsets[ring]),ink,strokeAlpha(i,ring)), aj = vertex(offset(j,ringOffsets[ring]),ink,strokeAlpha(j,ring))
+                    let bi = vertex(offset(i,ringOffsets[ring+1]),ink,strokeAlpha(i,ring+1)), bj = vertex(offset(j,ringOffsets[ring+1]),ink,strokeAlpha(j,ring+1))
                     triangle(ai,bi,bj); triangle(ai,bj,aj)
                 } }
             }
