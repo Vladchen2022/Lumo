@@ -15,9 +15,11 @@ public struct DeconstructionParameters: Codable, Equatable, Sendable {
     public var overlap = 0.55
     public var grouping = 0.60
     public var softness = 0.10
+    public var spacing = 0.5
+    public var organicCuts = false
     public init() {}
     public var fragmentCount: Int {8 + Int((granularity * 72).rounded())}
-    private enum CodingKeys: String, CodingKey {case expandedTransforms, strongTransforms, granularity, breakup, rotation, sizeVariation, overlap, grouping, softness}
+    private enum CodingKeys: String, CodingKey {case expandedTransforms, strongTransforms, granularity, breakup, rotation, sizeVariation, overlap, grouping, softness, spacing, organicCuts}
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy:CodingKeys.self)
         // Missing in 0.3 projects: retain their original construction until explicitly adjusted.
@@ -31,6 +33,8 @@ public struct DeconstructionParameters: Codable, Equatable, Sendable {
         overlap = try c.decodeIfPresent(Double.self,forKey:.overlap) ?? 0.55
         grouping = try c.decodeIfPresent(Double.self,forKey:.grouping) ?? 0.6
         softness = try c.decodeIfPresent(Double.self,forKey:.softness) ?? 0.1
+        spacing = try c.decodeIfPresent(Double.self,forKey:.spacing) ?? 0.5
+        organicCuts = try c.decodeIfPresent(Bool.self,forKey:.organicCuts) ?? false
     }
 }
 public enum DisplayMode: String, Codable, CaseIterable, Sendable {
@@ -192,6 +196,7 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
     public var lineExtraction = LineExtractionParameters()
     public var method = GenerationMethod.abstract
     public var deconstruction = DeconstructionParameters()
+    public var arrangement = FragmentArrangement()
     public var colorSeed: UInt64 = 0xCAFE_42
     public var shapeSeed: UInt64 = 0xBEEF_31
     public var mode = DisplayMode.combined
@@ -207,6 +212,7 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
     public var canvasAspect = 1.0
     public init() {}
     public var currentVersion: Int {
+        if arrangement != FragmentArrangement() || deconstruction.organicCuts || deconstruction.spacing != 0.5 {return 7}
         if method == .deconstruction && deconstruction.strongTransforms {return 6}
         if lineExtraction != LineExtractionParameters() {return 5}
         if fixedCanvas != nil {return 4}
@@ -225,7 +231,7 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
         colorLayers[index] = value
         if index == 0 {colorSource = value.source; colorLayers[0].source = nil}
     }
-    private enum CodingKeys: String, CodingKey {case version, fixedCanvas, lineExtraction, method, deconstruction, colorSeed, shapeSeed, mode, shapeDisplay, color, shape, appearance, colorSource, colorLayers, shapeSource, colorLocked, shapeLocked, canvasAspect}
+    private enum CodingKeys: String, CodingKey {case version, fixedCanvas, lineExtraction, method, deconstruction, arrangement, colorSeed, shapeSeed, mode, shapeDisplay, color, shape, appearance, colorSource, colorLayers, shapeSource, colorLocked, shapeLocked, canvasAspect}
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = try c.decode(Int.self,forKey:.version)
@@ -233,6 +239,7 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
         lineExtraction = try c.decodeIfPresent(LineExtractionParameters.self,forKey:.lineExtraction) ?? LineExtractionParameters()
         method = try c.decodeIfPresent(GenerationMethod.self,forKey:.method) ?? .abstract
         deconstruction = try c.decodeIfPresent(DeconstructionParameters.self,forKey:.deconstruction) ?? DeconstructionParameters()
+        arrangement = try c.decodeIfPresent(FragmentArrangement.self,forKey:.arrangement) ?? FragmentArrangement()
         colorSeed = try c.decode(UInt64.self,forKey:.colorSeed); shapeSeed = try c.decode(UInt64.self,forKey:.shapeSeed)
         mode = try c.decode(DisplayMode.self,forKey:.mode); shapeDisplay = try c.decode(ShapeDisplay.self,forKey:.shapeDisplay)
         color = try c.decode(ColorParameters.self,forKey:.color); shape = try c.decode(ShapeParameters.self,forKey:.shape)
@@ -245,7 +252,7 @@ public struct GenerationRecipe: Codable, Equatable, Sendable {
     }
     public mutating func apply(_ preset: CompositionPreset) {
         fixedCanvas = nil; lineExtraction = LineExtractionParameters()
-        method = .abstract; version = 1
+        method = .abstract; version = currentVersion
         shape = ShapeParameters(); appearance = AppearanceParameters()
         switch preset {
         case .geometric: shape.curvature = 0.05; shape.density = 0.32; mode = .color
@@ -297,6 +304,7 @@ public struct ExportSettings: Codable, Equatable, Sendable {
     public var width = 2048, height = 2048
     public var format = ImageFormat.png
     public var crop: CropRegion?
+    public var transparentLines: Bool?
     public init() {}
     public static func dimensions(aspect: Double, longEdge: Int) -> (width:Int,height:Int) {
         let edge=min(4096,max(1,longEdge))
@@ -324,24 +332,26 @@ public struct LumoProject: Codable, Equatable, Sendable {
     public init() {}
 }
 
-public struct RecipeHistory {
-    private var undoStates: [GenerationRecipe] = []
-    private var redoStates: [GenerationRecipe] = []
-    private var transaction: GenerationRecipe?
+public typealias RecipeHistory = EditHistory<GenerationRecipe>
+
+public struct EditHistory<State: Equatable> {
+    private var undoStates: [State] = []
+    private var redoStates: [State] = []
+    private var transaction: State?
     public init() {}
     public var canUndo: Bool { !undoStates.isEmpty }
     public var canRedo: Bool { !redoStates.isEmpty }
-    public mutating func begin(_ current: GenerationRecipe) { if transaction == nil { transaction = current } }
-    public mutating func record(before: GenerationRecipe, after: GenerationRecipe) {
+    public mutating func begin(_ current: State) { if transaction == nil { transaction = current } }
+    public mutating func record(before: State, after: State) {
         guard transaction == nil, before != after else { return }
         append(before)
     }
-    private mutating func append(_ recipe: GenerationRecipe) { undoStates.append(recipe); if undoStates.count > 100 { undoStates.removeFirst() }; redoStates.removeAll() }
-    public mutating func end(_ current: GenerationRecipe) { if let before = transaction, before != current { append(before) }; transaction = nil }
-    public mutating func undo(_ current: GenerationRecipe) -> GenerationRecipe? {
+    private mutating func append(_ recipe: State) { undoStates.append(recipe); if undoStates.count > 100 { undoStates.removeFirst() }; redoStates.removeAll() }
+    public mutating func end(_ current: State) { if let before = transaction, before != current { append(before) }; transaction = nil }
+    public mutating func undo(_ current: State) -> State? {
         end(current); guard let result = undoStates.popLast() else { return nil }; redoStates.append(current); return result
     }
-    public mutating func redo(_ current: GenerationRecipe) -> GenerationRecipe? {
+    public mutating func redo(_ current: State) -> State? {
         guard let result = redoStates.popLast() else { return nil }; undoStates.append(current); return result
     }
 }

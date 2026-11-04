@@ -9,6 +9,7 @@ public struct ImageFragment: Codable, Equatable, Sendable {
     public var sourceCenter: SIMD2<Float>
     public var contour: [SIMD2<Float>]
     public var textureCoordinates: [SIMD2<Float>]
+    public var triangles: [Int]?
 }
 extension SourceReference {
     public var deconstructionImage: Data {renderImage ?? samplingImage ?? thumbnail}
@@ -24,17 +25,27 @@ extension SourceReference {
 private struct FragmentCell: Sendable {
     var center: SIMD2<Double>
     var contour: [SIMD2<Double>]
+    var triangles: [Int]?
 }
 private final class PartitionCache: @unchecked Sendable {
-    struct Key: Equatable {var seed: UInt64; var count: Int; var aspect: Double}
+    struct Key: Equatable {var seed: UInt64; var count: Int; var aspect: Double; var organic: Bool}
     private let lock = NSLock()
     private var entries: [(Key,[FragmentCell])] = []
-    func cells(seed: UInt64, count: Int, aspect: Double) -> [FragmentCell] {
-        let key = Key(seed:seed,count:count,aspect:aspect)
+    func cells(seed: UInt64, count: Int, aspect: Double, organic: Bool) -> [FragmentCell] {
+        let key = Key(seed:seed,count:count,aspect:aspect,organic:organic)
         lock.lock()
         if let found = entries.first(where:{$0.0 == key}) {lock.unlock(); return found.1}
         lock.unlock()
-        let result = DeconstructionGenerator.partition(seed:seed,count:count,aspect:aspect)
+        var result = DeconstructionGenerator.partition(seed:seed,count:count,aspect:aspect)
+        if organic {
+            let warp=CrackWarp(seed:seed,aspect:aspect)
+            let warped=result.map {cell -> FragmentCell in
+                let contour=warp.contour(cell.contour)
+                return FragmentCell(center:warp.point(cell.center),contour:contour,triangles:CrackWarp.triangles(contour))
+            }
+            // Use a single partition for the entire layer, including on degenerate inputs.
+            if warped.allSatisfy({$0.triangles?.isEmpty == false}) {result=warped}
+        }
         lock.lock(); entries.insert((key,result),at:0)
         if entries.count > 12 {entries.removeLast()}
         lock.unlock(); return result
@@ -45,20 +56,23 @@ public enum DeconstructionGenerator {
     private static let cache = PartitionCache()
     public static func generate(_ recipe: GenerationRecipe) -> AbstractScene {
         let layers = (0..<3).map {recipe.layer($0)}
-        let p = recipe.deconstruction
-        // A short, smooth transition preserves exact reassembly at zero while giving
-        // rotation and size their full range once breakup reaches 20%.
-        let progress = min(1,p.breakup/0.2)
-        let activation = progress*progress*(3-2*progress)
-        // A responsive position curve makes low breakup values useful. The final
-        // target remains inside the canvas, rather than throwing pieces off-screen.
-        let scatter = p.strongTransforms ? sqrt(p.breakup) : p.breakup
         var fragments: [ImageFragment] = []
+        var layerSoftness:[Double]=[]
         for index in layers.indices {
-            guard let source = layers[index].source else {continue}
+            let configuration=recipe.arrangement.layers[index]
+            let p=configuration?.parameters ?? recipe.deconstruction
+            layerSoftness.append(p.softness*p.breakup)
+            guard let source=layers[index].source else {continue}
+            // A short, smooth transition preserves exact reassembly at zero while giving
+            // rotation and size their full range once breakup reaches 20%.
+            let progress = min(1,p.breakup/0.2)
+            let activation = progress*progress*(3-2*progress)
+            // A responsive position curve makes low breakup values useful. The final
+            // target remains inside the canvas, rather than throwing pieces off-screen.
+            let scatter = p.strongTransforms ? sqrt(p.breakup) : p.breakup
             let sourceAspect = source.imageAspect
-            let seed = recipe.shapeSeed &+ UInt64(index) &* 0xD1B54A32D192ED03
-            let cells = cache.cells(seed:seed,count:p.fragmentCount,aspect:sourceAspect)
+            let seed = (configuration?.lockedShapeSeed ?? recipe.shapeSeed) &+ UInt64(index) &* 0xD1B54A32D192ED03
+            let cells = cache.cells(seed:seed,count:p.fragmentCount,aspect:sourceAspect,organic:p.organicCuts)
             // Fit the complete source without stretching or dropping its edges.
             let height = min(1,recipe.canvasAspect/sourceAspect), width = height*sourceAspect
             let origin = SIMD2<Double>((recipe.canvasAspect-width)/2,(1-height)/2)
@@ -82,7 +96,11 @@ public enum DeconstructionGenerator {
                 let translation = p.strongTransforms ? groupTarget-pivot : groupOffset
                 let coherentCenter = pivot+rotated+translation*scatter
                 let independentCenter = originalCenter+(target-originalCenter)*scatter
-                let center = independentCenter*(1-p.grouping)+coherentCenter*p.grouping
+                var center = independentCenter*(1-p.grouping)+coherentCenter*p.grouping
+                if p.spacing != 0.5 {
+                    let focal=SIMD2(recipe.canvasAspect/2,0.5)
+                    center=focal+(center-focal)*exp((p.spacing-0.5)*1.8*activation)
+                }
                 let angle = independentAngle*(1-p.grouping)+coherentAngle*p.grouping
                 let sizeSample = random.unit()
                 let size: Double
@@ -112,16 +130,28 @@ public enum DeconstructionGenerator {
                     return SIMD2(Float(center.x+local.x*c-local.y*s),Float(center.y+local.x*s+local.y*c))
                 }
                 let coordinates = cell.contour.map {SIMD2<Float>(Float($0.x/sourceAspect),Float($0.y))}
-                let fragment = ImageFragment(id:index*80+id,layer:index,center:SIMD2(Float(center.x),Float(center.y)),sourceCenter:SIMD2(Float(uvCenter.x),Float(uvCenter.y)),contour:contour,textureCoordinates:coordinates)
-                var order = SeededRandom(seed:recipe.colorSeed &+ UInt64(index*80+id) &* 0xE7037ED1A0B428DB)
+                var fragment = ImageFragment(id:index*80+id,layer:index,center:SIMD2(Float(center.x),Float(center.y)),sourceCenter:SIMD2(Float(uvCenter.x),Float(uvCenter.y)),contour:contour,textureCoordinates:coordinates,triangles:cell.triangles)
+                if let edit=recipe.arrangement.fragments[fragment.id] {
+                    if edit.hidden {continue}
+                    if let pin=edit.pinned,let aspect=edit.pinnedAspect {
+                        fragment=pin
+                        let scale=SIMD2(Float(recipe.canvasAspect/aspect),1)
+                        fragment.center *= scale
+                        fragment.contour=fragment.contour.map {$0*scale}
+                    }
+                    let offset=edit.offset*SIMD2(Float(recipe.canvasAspect),1)
+                    fragment.center += offset
+                    fragment.contour=fragment.contour.map {$0+offset}
+                }
+                var order = SeededRandom(seed:(configuration?.lockedColorSeed ?? recipe.colorSeed) &+ UInt64(index*80+id) &* 0xE7037ED1A0B428DB)
                 ordered.append((order.next(),fragment))
             }
             fragments += ordered.sorted {$0.0 < $1.0}.map(\.1)
         }
         var appearance = recipe.appearance
         // Exact reassembly has no feathering seams, regardless of the retained edge setting.
-        appearance.softness = p.softness*p.breakup
-        return AbstractScene(aspect:recipe.canvasAspect,background:RGBColor(0.94,0.93,0.90),shapes:[],mode:.color,shapeDisplay:.solid,appearance:appearance,layers:layers,method:.deconstruction,fragments:fragments)
+        appearance.softness = recipe.deconstruction.softness*recipe.deconstruction.breakup
+        return AbstractScene(aspect:recipe.canvasAspect,background:RGBColor(0.94,0.93,0.90),shapes:[],mode:.color,shapeDisplay:.solid,appearance:appearance,layers:layers,method:.deconstruction,fragments:fragments,layerOrder:recipe.arrangement.layerOrder == [0,1,2] ? nil : recipe.arrangement.layerOrder,fragmentSoftness:recipe.arrangement.layers.isEmpty ? nil : layerSoftness)
     }
 
     /// A complete Voronoi partition: all source pixels belong to a convex fragment.

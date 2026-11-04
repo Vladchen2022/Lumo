@@ -31,10 +31,17 @@ public struct AbstractScene: Codable, Equatable, Sendable {
     public var layers: [ColorLayer] = []
     public var method: GenerationMethod = .abstract
     public var fragments: [ImageFragment] = []
+    public var layerOrder: [Int]?
+    public var fragmentSoftness: [Double]?
     public var lineInput: SourceReference?
     public var lineParameters: LineExtractionParameters?
     /// Derived mask; never stored in a project recipe.
     public var lineMask: Data?
+}
+extension AbstractScene {
+    public static func linePreview(input:SourceReference,aspect:Double,parameters:LineExtractionParameters) -> AbstractScene {
+        AbstractScene(aspect:aspect,background:.white,shapes:[],mode:.color,shapeDisplay:.solid,appearance:AppearanceParameters(),lineInput:input,lineParameters:parameters)
+    }
 }
 public enum SceneGenerator {
     public static func palette(for recipe: GenerationRecipe, layer index: Int = 0, adjusted: Bool = true, sixSlots: Bool = false) -> [PaletteEntry] {

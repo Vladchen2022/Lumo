@@ -69,7 +69,7 @@ public final class MetalRenderer: @unchecked Sendable {
         encoder.setFragmentTexture(texture,index:0)
         encoder.drawPrimitives(type:.triangle,vertexStart:0,vertexCount:vertices.count); encoder.endEncoding()
     }
-    public func encode(scene: AbstractScene, viewport: CGRect, pass: MTLRenderPassDescriptor, command: MTLCommandBuffer) throws {
+    public func encode(scene: AbstractScene, viewport: CGRect, pass: MTLRenderPassDescriptor, command: MTLCommandBuffer, transparentLines: Bool = false) throws {
         guard let target = pass.colorAttachments[0].texture else {throw LumoError.message("画布缺少输出纹理。")}
         func draw(_ vertices: [MeshVertex], _ pass: MTLRenderPassDescriptor) throws {
             guard !vertices.isEmpty else {return}
@@ -81,17 +81,23 @@ public final class MetalRenderer: @unchecked Sendable {
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
             encoder.endEncoding()
         }
-        try draw(Self.mesh(scene:scene,layer:nil,background:true),pass)
+        let maskOnly=transparentLines && scene.lineInput != nil && scene.lineParameters != nil
+        if maskOnly {
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].clearColor = MTLClearColorMake(0,0,0,0)
+            guard let encoder=command.makeRenderCommandEncoder(descriptor:pass) else {throw LumoError.message("无法创建透明画布。")}
+            encoder.endEncoding()
+        } else {try draw(Self.mesh(scene:scene,layer:nil,background:true),pass)}
         if let input=scene.lineInput,let parameters=scene.lineParameters {
             let mask = try scene.lineMask ?? prepareLines(scene:scene)
-            if parameters.overlayOriginal {try drawImage(data:input.deconstructionImage,aspect:scene.aspect,opacity:1,viewport:viewport,target:target,command:command)}
+            if parameters.overlayOriginal && !maskOnly {try drawImage(data:input.deconstructionImage,aspect:scene.aspect,opacity:1,viewport:viewport,target:target,command:command)}
             try drawImage(data:mask,aspect:scene.aspect,opacity:Float(parameters.opacity),viewport:viewport,target:target,command:command)
             return
         }
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat:.bgra8Unorm_srgb,width:target.width,height:target.height,mipmapped:false)
         textureDescriptor.storageMode = .private; textureDescriptor.usage = [.renderTarget,.shaderRead]
         guard let texture = device.makeTexture(descriptor:textureDescriptor) else {throw LumoError.message("无法创建颜色层，请降低画布尺寸。")}
-        for index in scene.layers.indices {
+        for index in (scene.layerOrder ?? Array(scene.layers.indices)) where scene.layers.indices.contains(index) {
             let layer = scene.layers[index]
             guard layer.enabled, layer.opacity > 0, index == 0 || layer.source != nil else {continue}
             if scene.method == .deconstruction && layer.source == nil {continue}
@@ -147,13 +153,28 @@ public final class MetalRenderer: @unchecked Sendable {
         for fragment in scene.fragments where fragment.layer == layer {
             let points = fragment.contour, uv = fragment.textureCoordinates, count = points.count
             guard count >= 3 else {continue}
+            let softness=scene.fragmentSoftness?[layer] ?? scene.appearance.softness
+            if let indices=fragment.triangles {
+                for i in indices {vertices.append(vertex(points[i],uv[i],alpha))}
+                let feather=Float(softness*0.009)
+                if feather>0 {
+                    for i in points.indices {
+                        let j=(i+1)%count, edge=points[j]-points[i]
+                        let out=SIMD2(edge.y,-edge.x)*(feather/max(simd_length(edge),0.000001))
+                        let a=vertex(points[i],uv[i],alpha), b=vertex(points[j],uv[j],alpha)
+                        let c=vertex(points[i]+out,uv[i],0), d=vertex(points[j]+out,uv[j],0)
+                        triangle(a,c,d); triangle(a,d,b)
+                    }
+                }
+                continue
+            }
             let clearance = points.indices.map {i -> Float in
                 let edge = points[(i+1)%count]-points[i], local = fragment.center-points[i]
                 return abs(edge.x*local.y-edge.y*local.x)/max(simd_length(edge),0.000001)
             }.min() ?? 0
             // A site can be close to a cell edge. Keep the inward feather ring around the site
             // so its triangle fan cannot fold or overlap at high softness or fine partitioning.
-            let feather = min(clearance*0.8,Float(scene.appearance.softness*0.025))
+            let feather = min(clearance*0.8,Float(softness*0.025))
             let center = vertex(fragment.center,fragment.sourceCenter,alpha)
             let normals = points.indices.map {i -> SIMD2<Float> in
                 let e1 = points[i]-points[(i+count-1)%count], e2 = points[(i+1)%count]-points[i]
@@ -176,7 +197,7 @@ public final class MetalRenderer: @unchecked Sendable {
         }
         return vertices
     }
-    public func image(scene: AbstractScene, width: Int, height: Int, crop: CropRegion? = nil) throws -> CGImage {
+    public func image(scene: AbstractScene, width: Int, height: Int, crop: CropRegion? = nil, transparentLines: Bool = false) throws -> CGImage {
         guard (1...4096).contains(width), (1...4096).contains(height) else { throw LumoError.message("导出宽高必须在 1–4096 像素之间。") }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: width, height: height, mipmapped: false)
         descriptor.storageMode = .shared; descriptor.usage = [.renderTarget, .shaderRead]
@@ -186,7 +207,7 @@ public final class MetalRenderer: @unchecked Sendable {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
         let viewport = crop?.viewport(aspect: scene.aspect) ?? CGRect(x: 0, y: 0, width: scene.aspect, height: 1)
-        try encode(scene: scene, viewport: viewport, pass: pass, command: command)
+        try encode(scene: scene, viewport: viewport, pass: pass, command: command, transparentLines:transparentLines)
         command.commit(); command.waitUntilCompleted()
         if let error = command.error { throw error }
         let bytesPerRow = width * 4
@@ -196,7 +217,7 @@ public final class MetalRenderer: @unchecked Sendable {
         return image
     }
     public func export(scene: AbstractScene, settings: ExportSettings, to url: URL) throws {
-        let image = try image(scene: scene, width: settings.width, height: settings.height, crop: settings.crop)
+        let image = try image(scene: scene, width: settings.width, height: settings.height, crop: settings.crop, transparentLines:settings.format == .png && settings.transparentLines == true)
         let type = settings.format == .png ? UTType.png.identifier : UTType.jpeg.identifier
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, type as CFString, 1, nil) else { throw LumoError.message("无法创建导出文件。") }

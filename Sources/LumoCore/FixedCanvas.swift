@@ -40,6 +40,7 @@ public enum EffectCommitter {
         next.colorSource=reference; next.colorLayers=inputs.colorLayers
         next.shapeSource=reference
         next.lineExtraction=LineExtractionParameters()
+        next.arrangement=FragmentArrangement()
         if recipe.lineExtraction.enabled {next.method = .deconstruction}
         if next.method == .deconstruction {
             next.deconstruction.expandedTransforms=true

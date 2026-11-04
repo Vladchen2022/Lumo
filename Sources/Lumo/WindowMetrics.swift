@@ -15,7 +15,7 @@ final class WindowMetrics:@unchecked Sendable {
     var count:Int {lock.lock(); defer {lock.unlock()}; return total}
     @MainActor static func run(model:StudioModel) async {
         guard enabled else {return}
-        if let index=CommandLine.arguments.firstIndex(of:"--profile-project"),CommandLine.arguments.count>index+1 {model.openProject(url:URL(fileURLWithPath:CommandLine.arguments[index+1]))}
+        if let index=CommandLine.arguments.firstIndex(of:"--profile-project"),CommandLine.arguments.count>index+1 {await model.loadProject(url:URL(fileURLWithPath:CommandLine.arguments[index+1]))}
         try? await Task.sleep(nanoseconds:1_500_000_000)
         let original=model.recipe
         shared.start()

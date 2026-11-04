@@ -30,7 +30,15 @@ import LumoCore
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication) -> Bool {true}
-    func applicationShouldTerminate(_ sender:NSApplication) -> NSApplication.TerminateReply {model?.confirmAbandon() == false ? .terminateCancel : .terminateNow}
+    func applicationShouldTerminate(_ sender:NSApplication) -> NSApplication.TerminateReply {
+        guard let model else {return .terminateNow}
+        Task {
+            let confirmed=await model.confirmAbandon()
+            if confirmed {await model.clearDraft()}
+            sender.reply(toApplicationShouldTerminate:confirmed)
+        }
+        return .terminateLater
+    }
     func application(_ application:NSApplication,open urls:[URL]) {if let url=urls.first {model?.openProject(url:url)}}
 }
 struct LumoApp:App {
@@ -42,16 +50,17 @@ struct LumoApp:App {
             StudioView(model:model).onAppear {
                 delegate.model=model
                 if WindowMetrics.enabled && !profiled {profiled=true; Task {await WindowMetrics.run(model:model)}}
-            }.onOpenURL {model.openProject(url:$0)}
+            }.task {await model.checkDraft()}
+                .onOpenURL {model.openProject(url:$0)}
         }.defaultSize(width:1360,height:900).windowStyle(.hiddenTitleBar)
             .commands {
                 CommandGroup(replacing:.newItem) {
-                    Button("新建构成") {model.newProject()}.keyboardShortcut("n")
-                    Button("打开项目…") {model.openProject()}.keyboardShortcut("o")
+                    Button("新建构成") {model.newProject()}.keyboardShortcut("n").disabled(model.isProjectBusy)
+                    Button("打开项目…") {model.openProject()}.keyboardShortcut("o").disabled(model.isProjectBusy)
                 }
                 CommandGroup(replacing:.saveItem) {
-                    Button("保存项目") {model.saveProject()}.keyboardShortcut("s")
-                    Button("项目另存为…") {model.saveProject(asNew:true)}.keyboardShortcut("s",modifiers:[.command,.shift])
+                    Button("保存项目") {model.saveProject()}.keyboardShortcut("s").disabled(model.isProjectBusy)
+                    Button("项目另存为…") {model.saveProject(asNew:true)}.keyboardShortcut("s",modifiers:[.command,.shift]).disabled(model.isProjectBusy)
                     Divider()
                     Button("导出图片…") {model.showExportSheet=true}.keyboardShortcut("e",modifiers:[.command,.shift]).disabled(!model.canExport)
                 }
@@ -61,12 +70,12 @@ struct LumoApp:App {
                 }
                 CommandMenu("构成") {
                     Button("固定当前效果") {model.fixCurrentEffect()}.keyboardShortcut("f",modifiers:[.command,.shift]).disabled(!model.canFix)
-                    Button("抽取线条") {model.extractLines()}.keyboardShortcut("l",modifiers:[.command,.shift]).disabled(model.recipe.fixedCanvas == nil || model.isFixing || model.recipe.lineExtraction.enabled)
-                    Button("返回构成") {model.returnToComposition()}.disabled(!model.recipe.lineExtraction.enabled)
+                    Button("试提当前线稿") {model.extractLines()}.keyboardShortcut("l",modifiers:[.command,.shift]).disabled(!model.canExtractLines)
+                    Button("返回构成") {model.returnToComposition()}.disabled(!model.isShowingLines)
                     Divider()
                     Button("退出框选") {model.finishCrop()}.disabled(!model.isCropping)
                     Divider()
-                    Button("全部随机") {model.randomize()}.keyboardShortcut("r").disabled(model.recipe.lineExtraction.enabled || (model.recipe.colorLocked && model.recipe.shapeLocked))
+                    Button("全部随机") {model.randomize()}.keyboardShortcut("r").disabled(model.isShowingLines || (model.recipe.colorLocked && model.recipe.shapeLocked))
                     Button("收藏当前构成") {model.addSnapshot()}.keyboardShortcut("d")
                     Divider()
                     ForEach(CompositionPreset.allCases,id:\.self) {preset in Button(preset.title) {model.apply(preset)}}

@@ -20,7 +20,8 @@ let package = Package(
         ),
         .target(name: "LumoCore", dependencies: ["CLineTop"], resources: [.copy("Resources")]),
         .executableTarget(name: "Lumo", dependencies: ["LumoCore"]),
-        .testTarget(name: "LumoCoreTests", dependencies: ["LumoCore"])
+        .testTarget(name: "LumoCoreTests", dependencies: ["LumoCore"]),
+        .testTarget(name: "LumoStudioTests", dependencies: ["Lumo", "LumoCore"])
     ],
     swiftLanguageModes: [.v5],
     cxxLanguageStandard: .cxx17

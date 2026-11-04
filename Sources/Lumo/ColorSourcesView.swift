@@ -3,6 +3,8 @@ import LumoCore
 
 struct ColorSourcesView: View {
     @ObservedObject var model: StudioModel
+    @State private var layerCenters:[Int:CGFloat]=[:]
+    @State private var dropTarget:Int?
     private var index: Int {model.selectedColorLayer}
     private var layer: ColorLayer {model.recipe.layer(index)}
     private var deconstruction: Bool {model.recipe.method == .deconstruction}
@@ -15,7 +17,7 @@ struct ColorSourcesView: View {
                     .buttonStyle(.plain).help("锁定全部配色；换结构时保持颜色层").accessibilityLabel("锁定颜色")
             }
             VStack(spacing:3) {
-                ForEach(0..<3,id:\.self) {i in
+                ForEach(model.layerOrder,id:\.self) {i in
                     let item = model.recipe.layer(i)
                     HStack(spacing:6) {
                         Button {model.selectedColorLayer = i} label: {
@@ -25,11 +27,32 @@ struct ColorSourcesView: View {
                                 Spacer(minLength:0)
                             }.contentShape(Rectangle())
                         }.buttonStyle(.plain).foregroundStyle(i == index ? Theme.accent : Theme.secondary).accessibilityLabel("选择颜色层 \(i+1)")
+                        if deconstruction {
+                            Image(systemName:model.recipe.arrangement.layers[i]?.isLocked == true ? "lock.fill" : "line.3.horizontal")
+                                .font(.system(size:10)).foregroundStyle(Theme.secondary)
+                                .frame(width:22,height:22).contentShape(Rectangle())
+                                .help("拖动图层调整叠放")
+                                .gesture(DragGesture(minimumDistance:4,coordinateSpace:.named("layerStack"))
+                                    .onChanged {value in dropTarget=nearestLayer(to:value.location.y)}
+                                    .onEnded {value in
+                                        if let target=nearestLayer(to:value.location.y) {model.moveLayer(i,nextTo:target)}
+                                        dropTarget=nil
+                                    })
+                        }
                         Button {model.edit {$0.setLayer(i) {$0.enabled.toggle()}}} label: {Image(systemName:item.enabled ? "eye" : "eye.slash").font(.system(size:10))}
                             .buttonStyle(.plain).foregroundStyle(Theme.secondary).disabled(i > 0 && item.source == nil).accessibilityLabel("显示颜色层 \(i+1)")
                     }.padding(.vertical,3)
+                        .background {
+                            GeometryReader {proxy in
+                                Color.clear.preference(key:LayerCenters.self,value:[i:proxy.frame(in:.named("layerStack")).midY])
+                            }
+                        }
+                        .overlay(alignment:.bottom) {
+                            if dropTarget==i {Rectangle().fill(Theme.accent).frame(height:1).allowsHitTesting(false)}
+                        }
                 }
-            }
+            }.coordinateSpace(name:"layerStack")
+                .onPreferenceChange(LayerCenters.self) {layerCenters=$0}
             Button {model.importImage(color:true,layer:index)} label: {
                 ZStack {
                     RoundedRectangle(cornerRadius:7).fill(Theme.inset)
@@ -41,6 +64,13 @@ struct ColorSourcesView: View {
             HStack {
                 Text("\(index+1) / 3 · 后面的层覆盖前面的层").font(.system(size:9)).foregroundStyle(Theme.secondary)
                 Spacer(minLength:0)
+                if deconstruction,let position=model.layerOrder.firstIndex(of:index) {
+                    Menu {
+                        Button("移到上一层") {model.moveLayer(index,nextTo:model.layerOrder[position+1])}.disabled(position==2)
+                        Button("移到下一层") {model.moveLayer(index,nextTo:model.layerOrder[position-1])}.disabled(position==0)
+                    } label: {Image(systemName:"arrow.up.arrow.down")}
+                    .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("调整图层顺序")
+                }
                 if layer.source != nil {Button {model.clearSource(color:true,layer:index)} label: {Image(systemName:"xmark.circle")}.buttonStyle(.plain).font(.system(size:10)).help("清除当前颜色层")}
             }
             if !deconstruction {
@@ -65,11 +95,21 @@ struct ColorSourcesView: View {
             }.font(.system(size:10)).controlSize(.small)
         }
     }
+    private func nearestLayer(to y:CGFloat) -> Int? {
+        layerCenters.min {abs($0.value-y)<abs($1.value-y)}?.key
+    }
     private func layerSlider(_ name: String, _ path: WritableKeyPath<ColorLayer,Double>) -> some View {
         VStack(spacing:4) {
             HStack {Text(name); Spacer(); Text("\(Int(layer[keyPath:path]*100))%").monospacedDigit()}.font(.system(size:10)).foregroundStyle(Theme.secondary)
             Slider(value:model.layerBinding(index,path),onEditingChanged:model.sliderEditing).controlSize(.small).accessibilityLabel("颜色层 \(index+1) \(name)")
         }
+    }
+}
+
+private struct LayerCenters: PreferenceKey {
+    static let defaultValue:[Int:CGFloat]=[:]
+    static func reduce(value:inout [Int:CGFloat],nextValue:()->[Int:CGFloat]) {
+        value.merge(nextValue(),uniquingKeysWith:{_,next in next})
     }
 }
 

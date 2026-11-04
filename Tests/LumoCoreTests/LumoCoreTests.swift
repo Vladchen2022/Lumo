@@ -187,8 +187,16 @@ final class LumoCoreTests:XCTestCase {
         XCTAssertEqual(project.snapshots.map(\.recipe),restored.snapshots.map(\.recipe))
         XCTAssertEqual(project.snapshots.map(\.id),restored.snapshots.map(\.id))
         for (before,after) in zip(project.snapshots,restored.snapshots) {XCTAssertEqual(before.date.timeIntervalSince1970,after.date.timeIntervalSince1970,accuracy:0.00001)}
-        let json = try JSONSerialization.jsonObject(with:Data(contentsOf:url)) as! [String:Any]
-        XCTAssertLessThanOrEqual((json["referenceImages"] as! [String:String]).count,6)
+        // Saving 100 references to the same images should add recipe metadata only.
+        var metadataOnly=project
+        for slot in 0..<3 {metadataOnly.recipe.setLayer(slot) {$0.source=nil}}
+        metadataOnly.snapshots=project.snapshots.map {SavedSnapshot(name:$0.name,recipe:metadataOnly.recipe)}
+        let uniqueImages=Set((0..<3).flatMap {slot -> [Data] in
+            let ref=project.recipe.layer(slot).source!
+            return [ref.thumbnail,ref.samplingImage,ref.renderImage].compactMap {$0}
+        })
+        let metadataSize=try ProjectStore.storageSize(metadataOnly)
+        XCTAssertLessThan(try ProjectStore.storageSize(project)-metadataSize,uniqueImages.reduce(0) {$0+$1.count}+100_000)
         let scene = SceneGenerator.generate(project.recipe)
         var changed = project.recipe; changed.setLayer(2) {$0.opacity = 0.3; $0.blockBlend = .multiply}
         XCTAssertEqual(scene.shapes.map(\.contour),SceneGenerator.generate(changed).shapes.map(\.contour))
